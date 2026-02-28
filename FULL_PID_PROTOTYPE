@@ -1,0 +1,184 @@
+#include <Arduino.h>
+#include <SparkFun_TB6612.h>
+#include <TaskScheduler.h>
+#include <QuickPID.h>
+#include <jled.h>
+
+#define HISTORY_SIZE 10
+#define NO_LINE_COUNT 20
+
+auto led = JLed(2).Breathe(700).DelayAfter(300).Forever();
+
+/************ MOTOR PIN ************/
+#define AIN1 21
+#define BIN1 18
+#define AIN2 22
+#define BIN2 5
+#define PWMA 23
+#define PWMB 15
+#define STBY 19
+
+const int offsetA = 1;
+const int offsetB = 1;
+
+Motor motorRight = Motor(AIN1, AIN2, PWMA, offsetA, STBY);
+Motor motorLeft  = Motor(BIN1, BIN2, PWMB, offsetB, STBY);
+
+/************ SENSOR PIN (SAMA) ************/
+const uint8_t SensorCount = 8;
+const uint8_t sensorPins[SensorCount] = {34,35,32,33,25,26,27,14};
+
+uint16_t sensorValues[SensorCount];
+uint16_t minValues[SensorCount];
+uint16_t maxValues[SensorCount];
+
+float sensorWeights[SensorCount] = {12.5,2.5,0.5,0.1,0.1,0.5,2.5,12.5};
+uint16_t readingHistory[SensorCount][HISTORY_SIZE];
+
+Scheduler runner;
+
+int32_t lineError = 0;
+uint16_t lineThreshold = 800;
+uint8_t noLineCount = 0;
+
+/************ PID ************/
+float Kp = 1;
+float Ki = 0.05;
+float Kd = 0.25;
+
+float setPointLeft = 0;
+float inputLeft = 0;
+float outputLeft = 0;
+
+float setPointRight = 0;
+float inputRight = 0;
+float outputRight = 0;
+
+QuickPID leftPid(&inputLeft, &outputLeft, &setPointLeft, Kp, Ki, Kd, QuickPID::Action::direct);
+QuickPID rightPid(&inputRight, &outputRight, &setPointRight, Kp, Ki, Kd, QuickPID::Action::direct);
+
+/************ FUNCTION DECLARE ************/
+void readAndCalculateError();
+void calculateMotorSpeed();
+void setMotorSpeed();
+void recordHistory();
+
+Task t1(10, TASK_FOREVER, &readAndCalculateError, &runner, true);
+Task t2(10, TASK_FOREVER, &calculateMotorSpeed, &runner, true);
+Task t3(10, TASK_FOREVER, &setMotorSpeed, &runner, true);
+Task t4(30, TASK_FOREVER, &recordHistory, &runner, true);
+
+/************ READ SENSOR ************/
+void readSensors()
+{
+  for(int i=0;i<SensorCount;i++)
+  {
+    int raw = analogRead(sensorPins[i]);
+
+    raw = constrain(raw, minValues[i], maxValues[i]);
+
+    int mapped = map(raw, minValues[i], maxValues[i], 0, 1000);
+
+    sensorValues[i] = 1000 - mapped; // line hitam
+  }
+}
+
+/************ ERROR CALC ************/
+void readAndCalculateError()
+{
+  readSensors();
+
+  bool lineExists = false;
+  lineError = 0;
+
+  for(int i=0;i<SensorCount;i++)
+  {
+    lineError += (i - 3.5) * sensorValues[i] * sensorWeights[i];
+
+    if(sensorValues[i] > lineThreshold)
+      lineExists = true;
+  }
+
+  if(!lineExists)
+  {
+    noLineCount++;
+    if(noLineCount > NO_LINE_COUNT)
+      lineError = (lineError > 0) ? 50000 : -50000;
+  }
+  else
+  {
+    noLineCount = 0;
+  }
+}
+
+/************ HISTORY ************/
+void recordHistory()
+{
+  for(int i=0;i<SensorCount;i++)
+  {
+    for(int j=HISTORY_SIZE-1;j>0;j--)
+      readingHistory[i][j] = readingHistory[i][j-1];
+
+    readingHistory[i][0] = sensorValues[i];
+  }
+}
+
+/************ PID ************/
+void calculateMotorSpeed()
+{
+  inputRight = map(lineError, 0, 50000, 0, 255);
+  inputLeft  = map(lineError, 0,-50000, 0, 255);
+
+  rightPid.Compute();
+  leftPid.Compute();
+}
+
+/************ MOTOR ************/
+void setMotorSpeed()
+{
+  motorLeft.drive(255 - outputLeft);
+  motorRight.drive(255 - outputRight);
+}
+
+/************ CALIBRATION ************/
+void calibrateSensors()
+{
+  for(int i=0;i<SensorCount;i++)
+  {
+    minValues[i]=4095;
+    maxValues[i]=0;
+  }
+
+  unsigned long start = millis();
+  while(millis()-start < 5000)
+  {
+    for(int i=0;i<SensorCount;i++)
+    {
+      int v = analogRead(sensorPins[i]);
+      minValues[i] = min(minValues[i],v);
+      maxValues[i] = max(maxValues[i],v);
+    }
+  }
+}
+
+/************ SETUP ************/
+void setup()
+{
+  Serial.begin(115200);
+
+  for(int i=0;i<SensorCount;i++)
+    pinMode(sensorPins[i],INPUT);
+
+  Serial.println("Calibrating TCRT5000...");
+  calibrateSensors();
+  Serial.println("Done.");
+
+  leftPid.SetMode(QuickPID::Control::automatic);
+  rightPid.SetMode(QuickPID::Control::automatic);
+}
+
+/************ LOOP ************/
+void loop()
+{
+  runner.execute();
+}
