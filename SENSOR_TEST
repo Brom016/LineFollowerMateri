@@ -1,0 +1,79 @@
+#include <Arduino.h>
+
+
+const uint8_t SensorCount = 8;
+const uint8_t sensorPins[SensorCount] = {34,35,32,33,25,26,27,14};
+
+uint16_t sensorValues[SensorCount];
+uint16_t minValues[SensorCount];
+uint16_t maxValues[SensorCount];
+
+
+
+void calibrateSensors()
+{
+  for(int i=0;i<SensorCount;i++)
+  {
+    minValues[i] = 4095;
+    maxValues[i] = 0;
+  }
+
+  Serial.println("Kalibrasi 5 detik... Gerakkan sensor!");
+
+  unsigned long start = millis();
+  while(millis() - start < 5000)
+  {
+    for(int i=0;i<SensorCount;i++)
+    {
+      uint16_t v = analogRead(sensorPins[i]);
+
+      minValues[i] = min(minValues[i], v);
+      maxValues[i] = max(maxValues[i], v);
+    }
+  }
+
+  Serial.println("Kalibrasi selesai!");
+}
+
+
+
+void readSensors()
+{
+  for(int i=0;i<SensorCount;i++)
+  {
+    int raw = analogRead(sensorPins[i]);
+
+    raw = constrain(raw, minValues[i], maxValues[i]);
+    int mapped = map(raw, minValues[i], maxValues[i], 0, 1000);
+
+    sensorValues[i] = 1000 - mapped; // hitam = besar
+  }
+}
+
+
+
+void setup()
+{
+  Serial.begin(115200);
+
+  for(int i=0;i<SensorCount;i++)
+    pinMode(sensorPins[i], INPUT);
+
+  delay(2000);
+
+  calibrateSensors();
+}
+
+
+void loop()
+{
+  for(int i=0;i<SensorCount;i++)
+  {
+    uint16_t raw = analogRead(sensorPins[i]);
+    Serial.print(raw);
+    Serial.print("\t");
+  }
+
+  Serial.println();
+  delay(200);
+}
