@@ -1,7 +1,10 @@
 #include <Arduino.h>
 #include <SparkFun_TB6612.h>
 
-/************ MOTOR PIN ************/
+/************ DEBUG ************/
+#define DEBUG 1   // 1 = aktif, 0 = mati
+
+/************ MOTOR ************/
 #define AIN1 21
 #define BIN1 18
 #define AIN2 22
@@ -21,42 +24,52 @@ uint16_t sensorValues[SensorCount];
 uint16_t minValues[SensorCount];
 uint16_t maxValues[SensorCount];
 
-uint16_t threshold = 500;
+uint16_t threshold = 500; // 🔥 TUNING: ubah sesuai lighting
 
 /************ PID ************/
-float Kp = 25;
-float Ki = 0;
-float Kd = 15;
+// 🔥 START dari ini dulu
+float Kp = 25;   // respon utama (belok cepat atau lambat)
+float Ki = 0;    // biasanya 0 dulu (jarang dipakai di line follower)
+float Kd = 15;   // stabilisasi (ngurangin goyang)
 
 float error = 0, lastError = 0;
 float integral = 0;
 
 /************ SPEED ************/
-int baseSpeed = 120;
-int maxSpeed = 200;
+int baseSpeed = 120;   // 🔥 TUNING: makin tinggi makin cepat tapi rawan keluar
+int maxSpeed  = 200;
 
 /************ STATE ************/
 enum RobotState {
   FOLLOW_LINE,
   INTERSECTION,
+  SHARP_TURN,
   LOST_LINE
 };
 
 RobotState state = FOLLOW_LINE;
 
-/************ FUNCTION ************/
+/************ STRATEGI ************/
+bool PRIORITY_LEFT = true; // true = belok kiri dulu
+
+/************ DEBUG VAR ************/
+int g_active, g_left, g_right;
+
+/************ READ SENSOR ************/
 void readSensors()
 {
   for(int i=0;i<SensorCount;i++)
   {
     int raw = analogRead(sensorPins[i]);
-    raw = constrain(raw, minValues[i], maxValues[i]);
 
+    raw = constrain(raw, minValues[i], maxValues[i]);
     int mapped = map(raw, minValues[i], maxValues[i], 0, 1000);
-    sensorValues[i] = 1000 - mapped; // hitam tinggi
+
+    sensorValues[i] = 1000 - mapped; // hitam = tinggi
   }
 }
 
+/************ HITUNG ERROR ************/
 float calculateError()
 {
   long numerator = 0;
@@ -72,27 +85,71 @@ float calculateError()
 
   float position = numerator / (float)denominator;
 
-  return position - 3500; // tengah = 3.5 * 1000
+  return position - 3500; // tengah sensor
 }
 
+/************ DETEKSI KONDISI ************/
 void detectState()
 {
   int active = 0;
+  int leftSide = 0;
+  int rightSide = 0;
 
   for(int i=0;i<SensorCount;i++)
   {
     if(sensorValues[i] > threshold)
+    {
       active++;
+      if(i < 4) leftSide++;
+      else rightSide++;
+    }
   }
 
-  if(active >= 6)
-    state = INTERSECTION;
-  else if(active == 0)
+  g_active = active;
+  g_left = leftSide;
+  g_right = rightSide;
+
+  if(active == 0)
     state = LOST_LINE;
+
+  else if(active >= 6)
+  {
+    if(abs(leftSide - rightSide) <= 2)
+      state = INTERSECTION;
+    else
+      state = SHARP_TURN;
+  }
   else
     state = FOLLOW_LINE;
 }
 
+/************ DEBUG PRINT ************/
+void debugPrint(int leftSpeed, int rightSpeed)
+{
+#if DEBUG
+  Serial.print("STATE: ");
+
+  switch(state)
+  {
+    case FOLLOW_LINE: Serial.print("FOLLOW"); break;
+    case INTERSECTION: Serial.print("INTERSECTION"); break;
+    case SHARP_TURN: Serial.print("SHARP"); break;
+    case LOST_LINE: Serial.print("LOST"); break;
+  }
+
+  Serial.print(" | Err: "); Serial.print(error);
+  Serial.print(" | Act: "); Serial.print(g_active);
+  Serial.print(" | L: "); Serial.print(g_left);
+  Serial.print(" | R: "); Serial.print(g_right);
+
+  Serial.print(" | ML: "); Serial.print(leftSpeed);
+  Serial.print(" | MR: "); Serial.print(rightSpeed);
+
+  Serial.println();
+#endif
+}
+
+/************ KALIBRASI ************/
 void calibrate()
 {
   for(int i=0;i<SensorCount;i++)
@@ -114,6 +171,7 @@ void calibrate()
   }
 }
 
+/************ SETUP ************/
 void setup()
 {
   Serial.begin(115200);
@@ -121,27 +179,24 @@ void setup()
   for(int i=0;i<SensorCount;i++)
     pinMode(sensorPins[i], INPUT);
 
-  Serial.println("Kalibrasi...");
+  Serial.println("Kalibrasi sensor...");
   calibrate();
   Serial.println("Selesai");
 }
 
+/************ LOOP ************/
 void loop()
 {
   readSensors();
   detectState();
 
-  if(state == INTERSECTION)
-  {
-    // STRATEGI: LURUS
-    motorLeft.drive(baseSpeed);
-    motorRight.drive(baseSpeed);
-    return;
-  }
+  error = calculateError();
 
+  /******** LOST LINE ********/
   if(state == LOST_LINE)
   {
-    // pakai last error buat cari lagi
+    Serial.println("!!! LOST LINE !!!");
+
     if(lastError > 0)
     {
       motorLeft.drive(100);
@@ -155,11 +210,41 @@ void loop()
     return;
   }
 
-  // FOLLOW LINE (PID)
-  error = calculateError();
+  /******** INTERSECTION ********/
+  if(state == INTERSECTION)
+  {
+    Serial.println(">>> INTERSECTION <<<");
 
+    if(PRIORITY_LEFT)
+    {
+      motorLeft.drive(80);
+      motorRight.drive(150);
+    }
+    else
+    {
+      motorLeft.drive(150);
+      motorRight.drive(80);
+    }
+
+    delay(50); // 🔥 TUNING: 30–100 ms
+    return;
+  }
+
+  /******** SHARP TURN ********/
+  if(state == SHARP_TURN)
+  {
+    Serial.println("### SHARP TURN ###");
+    baseSpeed = 90; // pelan biar nggak kebuang
+  }
+  else
+  {
+    baseSpeed = 120;
+  }
+
+  /******** PID ********/
   float P = error;
-  integral += error;
+
+  integral += error;  // ⚠️ biasanya ga dipakai (biar aman)
   float D = error - lastError;
 
   float correction = (Kp * P) + (Ki * integral) + (Kd * D);
@@ -173,5 +258,9 @@ void loop()
   motorLeft.drive(leftSpeed);
   motorRight.drive(rightSpeed);
 
+  debugPrint(leftSpeed, rightSpeed);
+
   lastError = error;
+
+  delay(10); // biar serial kebaca
 }
