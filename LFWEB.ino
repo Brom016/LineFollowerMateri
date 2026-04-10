@@ -198,7 +198,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
 <title>Line Follower Control</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <style>
 :root{
   --g1:#1b5e20;--g2:#2e7d32;--g3:#388e3c;--g4:#43a047;
@@ -226,14 +225,94 @@ body{background:var(--g8);color:var(--text);font-family:'Segoe UI',system-ui,san
   box-shadow:0 0 5px #e53935;flex-shrink:0;transition:.3s}
 .ws-dot.on{background:#69f0ae;box-shadow:0 0 6px #69f0ae}
 
-/* Tabs */
-.tabs{display:flex;background:var(--g2);overflow-x:auto;
-  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+/* Hamburger Icon */
+.openbtn {
+  font-size: 1.2rem;
+  cursor: pointer;
+  background-color: transparent;
+  color: white;
+  border: none;
+  padding: 0;
+  margin-right: 10px;
+  display: block;
+}
+@media (min-width: 768px) {
+  .openbtn { display: none; }
+}
+
+/* Sidebar Navigation */
+.sidenav {
+  height: 100%;
+  width: 0;
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  left: 0;
+  background-color: var(--g1);
+  overflow-x: hidden;
+  transition: 0.5s;
+  padding-top: 60px;
+  box-shadow: var(--shadow);
+}
+.sidenav .tab {
+  padding: 12px 15px;
+  text-decoration: none;
+  font-size: 1rem;
+  color: rgba(255,255,255,.8);
+  display: block;
+  transition: 0.3s;
+  font-weight: 700;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+}
+.sidenav .tab:hover { color: #f1f1f1; }
+.sidenav .tab.on {
+  color: #fff;
+  border-bottom-color: #69f0ae;
+  background-color: var(--g2);
+}
+.sidenav .closebtn {
+  position: absolute;
+  top: 0;
+  right: 25px;
+  font-size: 36px;
+  margin-left: 50px;
+  color: #fff;
+  text-decoration: none;
+}
+.overlay {
+  position: fixed;
+  display: none;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0,0,0,0.5);
+  z-index: 99;
+  cursor: pointer;
+}
+
+/* Full-width tabs for larger screens */
+.tabs{
+  display: none;
+  background:var(--g2);
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:none;
+}
 .tabs::-webkit-scrollbar{display:none}
-.tab{flex:0 0 auto;padding:9px 15px;color:rgba(255,255,255,.65);font-size:.8rem;
+.tabs .tab{
+  flex:0 0 auto;padding:9px 15px;color:rgba(255,255,255,.65);font-size:.8rem;
   font-weight:700;cursor:pointer;border-bottom:3px solid transparent;
-  transition:.2s;user-select:none;white-space:nowrap}
-.tab.on{color:#fff;border-bottom-color:#69f0ae}
+  transition:.2s;user-select:none;white-space:nowrap
+}
+.tabs .tab.on{color:#fff;border-bottom-color:#69f0ae}
+
+@media (min-width: 768px) {
+  .tabs { display: flex; }
+}
 
 /* Pages */
 .page{display:none;padding:12px;max-width:500px;margin:0 auto;padding-bottom:24px}
@@ -375,9 +454,6 @@ input[type=text]:focus{border-color:var(--g4)}
   padding:8px 11px;font-size:.79rem;color:#5d4037;margin-top:7px;line-height:1.5}
 .warn{background:#fce4ec;border:1px solid #f48fb1;border-radius:9px;
   padding:8px 11px;font-size:.79rem;color:#880e4f;margin-top:7px;line-height:1.5}
-.step-num{display:inline-block;width:20px;height:20px;border-radius:50%;
-  background:var(--g4);color:#fff;font-size:.72rem;font-weight:800;
-  text-align:center;line-height:20px;margin-right:4px;flex-shrink:0}
 
 /* Toast */
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);
@@ -386,14 +462,18 @@ input[type=text]:focus{border-color:var(--g4)}
   z-index:100;white-space:nowrap;backdrop-filter:blur(4px)}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
-/* Divider */
-.hdivider{height:1px;background:var(--g7);margin:10px 0}
+/* Tambahan agar tombol lebih responsif di mobile */
+.btn, .mbtn, .pbtn, .openbtn {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(0,0,0,0.1);
+}
 </style>
 </head>
 <body>
+<div class="overlay" id="overlay" onclick="closeNav()"></div>
 
 <div class="hdr">
-  <i class="fa-solid fa-robot" style="font-size:1.2rem;opacity:.9"></i>
+  <button class="openbtn" onclick="openNav()">MENU</button>
   <h1>Line Follower Control</h1>
   <div class="hdr-right">
     <span id="stateBadge" class="badge stopped">STOPPED</span>
@@ -401,19 +481,29 @@ input[type=text]:focus{border-color:var(--g4)}
   </div>
 </div>
 
-<div class="tabs">
-  <div class="tab on" onclick="gotoTab('monitor')"><i class="fa-solid fa-chart-column"></i> Monitor</div>
-  <div class="tab"      onclick="gotoTab('control')"><i class="fa-solid fa-gamepad"></i> Kontrol</div>
-  <div class="tab"      onclick="gotoTab('settings')"><i class="fa-solid fa-sliders"></i> Settings</div>
-  <div class="tab"      onclick="gotoTab('profiles')"><i class="fa-solid fa-floppy-disk"></i> Profil</div>
-  <div class="tab"      onclick="gotoTab('guide')"><i class="fa-solid fa-book"></i> Panduan</div>
+<!-- Sidenav -->
+<div id="mySidenav" class="sidenav">
+  <a href="javascript:void(0)" class="closebtn" onclick="closeNav()">×</a>
+  <div class="tab on" onclick="gotoTab('monitor')">Monitor</div>
+  <div class="tab" onclick="gotoTab('control')">Kontrol</div>
+  <div class="tab" onclick="gotoTab('settings')">Settings</div>
+  <div class="tab" onclick="gotoTab('profiles')">Profil</div>
+  <div class="tab" onclick="gotoTab('guide')">Panduan</div>
 </div>
 
-<!-- ══════════════════ MONITOR PAGE ══════════════════ -->
-<div id="pg-monitor" class="page on">
+<!-- Tabs desktop -->
+<div class="tabs">
+  <div class="tab on" onclick="gotoTab('monitor')">Monitor</div>
+  <div class="tab" onclick="gotoTab('control')">Kontrol</div>
+  <div class="tab" onclick="gotoTab('settings')">Settings</div>
+  <div class="tab" onclick="gotoTab('profiles')">Profil</div>
+  <div class="tab" onclick="gotoTab('guide')">Panduan</div>
+</div>
 
+<!-- MONITOR PAGE -->
+<div id="pg-monitor" class="page on">
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-microchip"></i> Sensor Array (Hitam = Aktif)</div>
+    <div class="card-title">Sensor Array (Hitam = Aktif)</div>
     <div class="sstrip" id="sstrip">
       <div class="sbox" id="sb0"><span class="snum">0</span></div>
       <div class="sbox" id="sb1"><span class="snum">1</span></div>
@@ -436,12 +526,11 @@ input[type=text]:focus{border-color:var(--g4)}
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-chart-line"></i> Grafik Posisi Real-time</div>
+    <div class="card-title">Grafik Posisi Real-time</div>
     <div class="chart-wrap">
       <canvas id="chart" height="110"></canvas>
     </div>
-    <div style="display:flex;justify-content:space-between;font-size:.7rem;
-         color:var(--text2);margin-top:4px">
+    <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text2);margin-top:4px">
       <span>+3500 (Kanan)</span>
       <span style="color:var(--g3);font-weight:700">Error: <span id="errVal">0</span></span>
       <span>-3500 (Kiri)</span>
@@ -449,7 +538,7 @@ input[type=text]:focus{border-color:var(--g4)}
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-bolt"></i> Motor &amp; PID Output</div>
+    <div class="card-title">Motor & PID Output</div>
     <div class="mrow">
       <div class="mbox">
         <span class="mlabel">Motor KIRI (A)</span>
@@ -471,7 +560,7 @@ input[type=text]:focus{border-color:var(--g4)}
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-satellite-dish"></i> ADC Raw per Sensor</div>
+    <div class="card-title">ADC Raw per Sensor</div>
     <div class="adc-grid" id="adcGrid">
       <div class="adc-cell" id="adc0"><span class="alabel">S0</span>—</div>
       <div class="adc-cell" id="adc1"><span class="alabel">S1</span>—</div>
@@ -485,44 +574,31 @@ input[type=text]:focus{border-color:var(--g4)}
   </div>
 </div>
 
-<!-- ══════════════════ CONTROL PAGE ══════════════════ -->
+<!-- CONTROL PAGE -->
 <div id="pg-control" class="page">
-
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-rocket"></i> Mode Start</div>
+    <div class="card-title">Mode Start</div>
     <div class="mtoggle">
-      <button class="mbtn on" id="modeWebBtn" onclick="setMode('web')">
-        <i class="fa-solid fa-globe"></i> Web Mode
-      </button>
-      <button class="mbtn" id="modeDirBtn" onclick="setMode('direct')">
-        <i class="fa-solid fa-circle-dot"></i> Direct Mode
-      </button>
+      <button class="mbtn on" id="modeWebBtn" onclick="setMode('web')">Web Mode</button>
+      <button class="mbtn" id="modeDirBtn" onclick="setMode('direct')">Direct Mode</button>
     </div>
     <p id="modeDesc" style="font-size:.79rem;color:var(--text2);line-height:1.6">
       <strong>Web Mode:</strong> Robot diam menunggu perintah START dari halaman ini.
-      Cocok untuk kompetisi agar bisa start tepat waktu.
     </p>
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-gamepad"></i> Kontrol Robot</div>
-    <button class="btn btn-start" id="btnStart" onclick="doStart()">
-      <i class="fa-solid fa-play"></i>&nbsp; START
-    </button>
-    <button class="btn btn-stop" id="btnStop" onclick="doStop()">
-      <i class="fa-solid fa-stop"></i>&nbsp; STOP
-    </button>
+    <div class="card-title">Kontrol Robot</div>
+    <button class="btn btn-start" id="btnStart" onclick="doStart()">START</button>
+    <button class="btn btn-stop" id="btnStop" onclick="doStop()">STOP</button>
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-microscope"></i> Kalibrasi Sensor Otomatis</div>
+    <div class="card-title">Kalibrasi Sensor Otomatis</div>
     <p style="font-size:.8rem;color:var(--text2);line-height:1.6;margin-bottom:10px">
-      Gerakkan robot perlahan di atas area <strong>hitam & putih</strong>
-      selama <strong>5 detik</strong>. Threshold tiap sensor akan dihitung otomatis.
+      Gerakkan robot perlahan di atas area hitam dan putih selama 5 detik.
     </p>
-    <button class="btn btn-calib" id="btnCalib" onclick="doCalib()">
-      <i class="fa-solid fa-wand-magic-sparkles"></i>&nbsp; Mulai Kalibrasi (5 detik)
-    </button>
+    <button class="btn btn-calib" id="btnCalib" onclick="doCalib()">Mulai Kalibrasi (5 detik)</button>
     <div class="calib-prog" id="calibProg">
       <div class="prog-text">
         <span id="calibMsg">Kalibrasi berjalan...</span>
@@ -530,13 +606,11 @@ input[type=text]:focus{border-color:var(--g4)}
       </div>
       <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
     </div>
-    <div id="calibDone" style="display:none;margin-top:8px;font-size:.79rem;
-         color:var(--g2);font-weight:700;background:var(--g7);padding:7px 10px;
-         border-radius:8px"></div>
+    <div id="calibDone" style="display:none;margin-top:8px;font-size:.79rem;color:var(--g2);font-weight:700;background:var(--g7);padding:7px 10px;border-radius:8px"></div>
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-circle-info"></i> Status Sistem</div>
+    <div class="card-title">Status Sistem</div>
     <table class="sysinfo">
       <tr><td>Status Robot</td><td id="si-state">—</td></tr>
       <tr><td>Mode Start</td><td id="si-mode">—</td></tr>
@@ -548,11 +622,10 @@ input[type=text]:focus{border-color:var(--g4)}
   </div>
 </div>
 
-<!-- ══════════════════ SETTINGS PAGE ══════════════════ -->
+<!-- SETTINGS PAGE -->
 <div id="pg-settings" class="page">
-
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-sliders"></i> PID Controller</div>
+    <div class="card-title">PID Controller</div>
     <div class="pid-grid">
       <div class="pid-cell">
         <label>Kp</label>
@@ -573,64 +646,52 @@ input[type=text]:focus{border-color:var(--g4)}
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-bolt"></i> Kecepatan Motor (0-255)</div>
+    <div class="card-title">Kecepatan Motor (0-255)</div>
     <div class="srow">
       <label>Base Speed <span class="sv" id="sv-base">150</span></label>
-      <input type="range" id="baseSpeed" min="50" max="255" value="150"
-        oninput="sv('base',this.value)">
+      <input type="range" id="baseSpeed" min="50" max="255" value="150" oninput="sv('base',this.value)">
     </div>
     <div class="srow">
       <label>Max Speed <span class="sv" id="sv-max">200</span></label>
-      <input type="range" id="maxSpeed" min="50" max="255" value="200"
-        oninput="sv('max',this.value)">
+      <input type="range" id="maxSpeed" min="50" max="255" value="200" oninput="sv('max',this.value)">
     </div>
     <div class="srow">
       <label>Spin Speed – belok 90° <span class="sv" id="sv-spin">130</span></label>
-      <input type="range" id="spinSpeed" min="50" max="255" value="130"
-        oninput="sv('spin',this.value)">
+      <input type="range" id="spinSpeed" min="50" max="255" value="130" oninput="sv('spin',this.value)">
     </div>
     <div class="srow">
       <label>Search Speed – cari garis <span class="sv" id="sv-srch">70</span></label>
-      <input type="range" id="searchSpeed" min="20" max="180" value="70"
-        oninput="sv('srch',this.value)">
+      <input type="range" id="searchSpeed" min="20" max="180" value="70" oninput="sv('srch',this.value)">
     </div>
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-clock"></i> Timing</div>
+    <div class="card-title">Timing</div>
     <div class="srow">
       <label>Spin Time ms – durasi putar 90° <span class="sv" id="sv-spint">350</span></label>
-      <input type="range" id="spinTime" min="100" max="1200" step="10" value="350"
-        oninput="sv('spint',this.value)">
+      <input type="range" id="spinTime" min="100" max="1200" step="10" value="350" oninput="sv('spint',this.value)">
     </div>
     <div class="srow">
       <label>Junction Hold ms – crossing lurus <span class="sv" id="sv-junc">80</span></label>
-      <input type="range" id="junction" min="20" max="400" step="5" value="80"
-        oninput="sv('junc',this.value)">
+      <input type="range" id="junction" min="20" max="400" step="5" value="80" oninput="sv('junc',this.value)">
     </div>
     <div class="srow">
       <label>Finish Hold ms – kotak finish <span class="sv" id="sv-fin">500</span></label>
-      <input type="range" id="finish" min="150" max="3000" step="50" value="500"
-        oninput="sv('fin',this.value)">
+      <input type="range" id="finish" min="150" max="3000" step="50" value="500" oninput="sv('fin',this.value)">
     </div>
   </div>
 
-  <button class="btn btn-start" onclick="applySettings()">
-    <i class="fa-solid fa-check"></i>&nbsp; Terapkan &amp; Simpan Settings
-  </button>
-  <button class="btn btn-sec" onclick="refreshSettings()">
-    <i class="fa-solid fa-rotate"></i>&nbsp; Refresh dari Robot
-  </button>
+  <button class="btn btn-start" onclick="applySettings()">Terapkan & Simpan Settings</button>
+  <button class="btn btn-sec" onclick="refreshSettings()">Refresh dari Robot</button>
 </div>
 
-<!-- ══════════════════ PROFILES PAGE ══════════════════ -->
+<!-- PROFILES PAGE -->
 <div id="pg-profiles" class="page">
-
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-floppy-disk"></i> Simpan Settings Saat Ini</div>
+    <div class="card-title">Simpan Settings Saat Ini</div>
     <div class="save-row">
       <input type="text" id="pName" placeholder="Nama profil (cth: Lurus Cepat)" maxlength="18">
-      <button class="btn btn-start" onclick="saveProfile()"><i class="fa-solid fa-save"></i> Simpan</button>
+      <button class="btn btn-start" onclick="saveProfile()">Simpan</button>
     </div>
     <p style="font-size:.73rem;color:var(--text2);margin-top:6px">
       Profil menyimpan semua nilai PID, speed, dan timing saat ini.
@@ -638,141 +699,129 @@ input[type=text]:focus{border-color:var(--g4)}
   </div>
 
   <div class="card">
-    <div class="card-title"><i class="fa-solid fa-folder-open"></i> Profil Tersimpan
-      <span style="margin-left:auto;font-size:.7rem;color:var(--text2)" id="pCountLbl"></span>
-    </div>
+    <div class="card-title">Profil Tersimpan <span id="pCountLbl" style="margin-left:auto;font-size:.7rem;color:var(--text2)"></span></div>
     <div class="plist" id="pList">
-      <div style="text-align:center;color:var(--text2);font-size:.84rem;
-           padding:18px"><i class="fa-solid fa-inbox" style="font-size:1.4rem;display:block;margin-bottom:5px;color:var(--g6)"></i>Belum ada profil tersimpan</div>
+      <div style="text-align:center;color:var(--text2);font-size:.84rem;padding:18px">Belum ada profil tersimpan</div>
     </div>
-    <button class="btn btn-sec" onclick="loadProfiles()" style="margin-top:4px">
-      <i class="fa-solid fa-rotate"></i>&nbsp; Refresh Daftar Profil
-    </button>
+    <button class="btn btn-sec" onclick="loadProfiles()">Refresh Daftar Profil</button>
   </div>
 </div>
 
-<!-- ══════════════════ GUIDE PAGE ══════════════════ -->
+<!-- GUIDE PAGE (diperjelas + tambahan kasus tuning + rekomendasi line 2 cm) -->
 <div id="pg-guide" class="page">
   <div class="card">
 
     <div class="gsec">
-      <h4><i class="fa-solid fa-thumbtack"></i> Apa itu PID Controller?</h4>
-      <p>PID (Proportional–Integral–Derivative) adalah algoritma kontrol otomatis
-      yang membuat robot selalu berusaha menempatkan garis tepat di tengah
-      array sensor. Semakin jauh garis dari tengah, semakin besar koreksi
-      yang diberikan ke motor.</p>
+      <h4>Apa itu PID Controller?</h4>
+      <p>PID (Proportional–Integral–Derivative) adalah algoritma kontrol yang membuat robot selalu berusaha menempatkan garis tepat di tengah array sensor. Semakin jauh garis dari tengah, semakin besar koreksi yang diberikan ke motor kiri dan kanan.</p>
     </div>
 
     <div class="gsec">
-      <h4><i class="fa-solid fa-calculator"></i> Rumus &amp; Cara Kerja PID</h4>
-      <div class="formula">correction = Kp×error + Ki×Σerror + Kd×(error − error_lama)
+      <h4>Rumus PID</h4>
+      <div class="formula">correction = Kp × error + Ki × Σerror + Kd × (error − error_lama)
 
 SpeedMotorKiri  = BaseSpeed + correction
 SpeedMotorKanan = BaseSpeed − correction</div>
       <ul>
-        <li><strong>error</strong> = posisi garis (weighted average 8 sensor)</li>
-        <li><strong>Kp × error</strong> → koreksi proporsional terhadap seberapa jauh garis dari tengah</li>
-        <li><strong>Ki × Σerror</strong> → koreksi akumulasi; atasi error steady-state (jarang dipakai)</li>
-        <li><strong>Kd × Δerror</strong> → redaman; merespons kecepatan perubahan error (atasi osilasi)</li>
+        <li>error = posisi garis (weighted average dari 8 sensor)</li>
+        <li>Kp × error → koreksi proporsional (seberapa jauh garis dari tengah)</li>
+        <li>Ki × Σerror → koreksi akumulasi (jarang dipakai, biasanya tetap 0)</li>
+        <li>Kd × Δerror → redaman (kecepatan perubahan error, atasi osilasi)</li>
       </ul>
     </div>
 
     <div class="gsec">
-      <h4><i class="fa-solid fa-ruler"></i> Sistem Bobot Sensor</h4>
-      <div class="formula">S0=-3500 S1=-2500 S2=-1500 S3=-500
-S4=+500  S5=+1500 S6=+2500 S7=+3500
+      <h4>Sistem Bobot Sensor</h4>
+      <div class="formula">S0 = -3500   S1 = -2500   S2 = -1500   S3 = -500
+S4 = +500    S5 = +1500   S6 = +2500   S7 = +3500
 
-error = weighted_average(sensor aktif)
-Contoh: S3 & S4 aktif → error = (-500+500)/2 = 0 ✅</div>
-      <ul>
-        <li>Error = 0 → garis tepat di tengah → lurus sempurna</li>
-        <li>Error negatif → garis di kiri → motor kiri diperlambat, kanan dipercepat</li>
-        <li>Error positif → garis di kanan → motor kanan diperlambat, kiri dipercepat</li>
-      </ul>
+error = weighted_average(sensor aktif)</div>
+      <p>Contoh: hanya S3 & S4 aktif → error = 0 (garis tepat di tengah).</p>
     </div>
 
     <div class="gsec">
-      <h4><i class="fa-solid fa-bullseye"></i> Langkah-langkah Tuning PID</h4>
+      <h4>Langkah-langkah Tuning PID</h4>
       <ol>
-        <li>Set <strong>Ki=0, Kd=0</strong>, Base Speed 130, lalu naikkan <strong>Kp</strong> perlahan (0.01 per langkah)</li>
-        <li>Hentikan saat robot mulai zig-zag / berosilasi → itu nilai Kp terlalu besar</li>
-        <li>Turunkan Kp sedikit (−20%) agar di bawah titik osilasi</li>
-        <li>Naikkan <strong>Kd</strong> perlahan sampai osilasi teredam dan robot mulus</li>
-        <li>Naikkan Base Speed bertahap setelah lintasan lurus stabil</li>
-        <li>Tambah Kp +10–20% jika tikungan 90° tajam tidak terkejar</li>
-        <li><strong>Ki</strong> biasanya tidak diperlukan → biarkan 0</li>
+        <li>Set Ki = 0 dan Kd = 0. Naikkan Kp perlahan (mulai dari 0.01).</li>
+        <li>Jalankan robot. Naikkan Kp sampai robot mulai zig-zag / osilasi.</li>
+        <li>Turunkan Kp sekitar 20% dari nilai osilasi.</li>
+        <li>Naikkan Kd perlahan sampai osilasi hilang dan robot tetap stabil.</li>
+        <li>Naikkan Base Speed bertahap setelah lintasan lurus stabil.</li>
+        <li>Jika tikungan 90° tidak terkejar, tambah Kp 10–20% atau Kd sedikit.</li>
+        <li>Ki biasanya tetap 0.</li>
       </ol>
-      <div class="tip"><i class="fa-solid fa-lightbulb" style="color:#f9a825"></i> Tuning di lantai kompetisi aktual! Hasil berbeda di permukaan & pencahayaan berbeda.</div>
     </div>
 
     <div class="gsec">
-      <h4><i class="fa-solid fa-gauge-high"></i> Penjelasan Parameter Speed</h4>
+      <h4>Kasus Umum & Solusi Tuning</h4>
       <ul>
-        <li><strong>Base Speed</strong> – kecepatan jelajah normal. Mulai 130–150.</li>
-        <li><strong>Max Speed</strong> – batas atas per motor saat PID boost. Hindari terlalu tinggi agar motor tidak stall.</li>
-        <li><strong>Spin Speed</strong> – kecepatan saat pivot turn 90°. Terlalu cepat → lewat garis; terlalu lambat → tidak sampai 90°.</li>
-        <li><strong>Search Speed</strong> – kecepatan creep maju saat garis hilang (semua sensor putih).</li>
+        <li><strong>Robot zig-zag / osilasi terlalu besar</strong> → turunkan Kp, naikkan Kd</li>
+        <li><strong>Robot terlalu lambat mengejar garis (delay di tikungan)</strong> → naikkan Kp atau Kd</li>
+        <li><strong>Robot overshoot / melewati garis di tikungan</strong> → naikkan Kd</li>
+        <li><strong>Robot berhenti di tikungan tajam</strong> → naikkan Max Speed dan Kp</li>
+        <li><strong>Robot goyang-goyang kecil di lintasan lurus</strong> → turunkan Kp sedikit</li>
+        <li><strong>Robot keluar jalur saat kecepatan tinggi</strong> → turunkan Base Speed atau naikkan Kd</li>
+      </ul>
+      <div class="tip">Tuning terbaik dilakukan di lantai kompetisi aktual dengan pencahayaan yang sama.</div>
+    </div>
+
+    <div class="gsec">
+      <h4>Rekomendasi Tuning untuk Line Hitam Lebar 2 cm</h4>
+      <p>Untuk garis hitam lebar 2 cm (standar banyak kompetisi), gunakan nilai awal berikut sebagai titik mulai:</p>
+      <div class="formula">Kp = 0.045 – 0.065
+Ki = 0.000
+Kd = 0.025 – 0.045
+Base Speed = 130 – 160
+Max Speed = 180 – 220
+Spin Speed = 120 – 140
+Spin Time = 320 – 380 ms</div>
+      <ul>
+        <li>Mulai dengan Kp 0.050 dan Kd 0.030</li>
+        <li>Naikkan Base Speed secara bertahap setelah robot stabil di lintasan lurus</li>
+        <li>Jika garis terasa “terlalu tipis” bagi sensor, naikkan Kp sedikit lebih tinggi</li>
+      </ul>
+      <div class="tip">Nilai ini adalah rekomendasi awal. Lakukan tuning ulang setiap kali pindah lokasi atau ganti baterai.</div>
+    </div>
+
+    <div class="gsec">
+      <h4>Penjelasan Parameter Speed</h4>
+      <ul>
+        <li>Base Speed → kecepatan normal di lintasan lurus</li>
+        <li>Max Speed → batas atas saat PID memberikan boost</li>
+        <li>Spin Speed → kecepatan saat pivot turn 90°</li>
+        <li>Search Speed → kecepatan lambat saat mencari garis yang hilang</li>
       </ul>
     </div>
 
     <div class="gsec">
-      <h4><i class="fa-solid fa-clock"></i> Penjelasan Parameter Timing</h4>
+      <h4>Penjelasan Parameter Timing</h4>
       <ul>
-        <li><strong>Spin Time ms</strong> – durasi pivot turn. Kalibrasi: ukur berapa ms robot berputar tepat 90° di lantai aktual.</li>
-        <li><strong>Junction Hold ms</strong> – threshold all-black dianggap "garis horizontal / crossing" → robot lanjut lurus. Default 80ms.</li>
-        <li><strong>Finish Hold ms</strong> – threshold all-black dianggap "kotak finish" → robot berhenti. Default 500ms.</li>
-      </ul>
-      <div class="tip"><i class="fa-solid fa-lightbulb" style="color:#f9a825"></i> Logika: all-black &lt; JunctionHold → lewat lurus | all-black &gt; FinishHold → STOP</div>
-    </div>
-
-    <div class="gsec">
-      <h4><i class="fa-solid fa-microscope"></i> Kalibrasi Sensor - Kenapa Penting?</h4>
-      <p>Setiap sensor TCRT5000 memiliki karakteristik berbeda. Kalibrasi otomatis
-      mengukur nilai ADC minimum (putih) dan maksimum (hitam) lalu menetapkan
-      threshold di titik tengah untuk setiap sensor secara individual.</p>
-      <ol style="margin-top:6px">
-        <li>Buka tab <strong>Kontrol</strong></li>
-        <li>Tekan <strong>Mulai Kalibrasi</strong></li>
-        <li>Gerakkan robot perlahan melewati area hitam dan putih selama 5 detik</li>
-        <li>Threshold otomatis tersimpan di flash ESP32</li>
-      </ol>
-      <div class="tip"><i class="fa-solid fa-lightbulb" style="color:#f9a825"></i> Kalibrasi ulang setiap berpindah lokasi atau pencahayaan berubah!</div>
-    </div>
-
-    <div class="gsec">
-      <h4><i class="fa-solid fa-rocket"></i> Mode Start – Perbedaan Web vs Direct</h4>
-      <ul>
-        <li><strong>Web Mode</strong> – Robot diam saat menyala. START hanya dari tombol web.
-          Ideal untuk kompetisi: posisikan robot → tekan START tepat waktunya.</li>
-        <li><strong>Direct Mode</strong> – Robot langsung jalan begitu ESP32 menyala.
-          Tombol BOOT (GPIO0) bisa toggle Start/Stop. Web tetap bisa STOP kapan saja.</li>
+        <li>Spin Time ms → durasi pivot turn 90° (ukur manual di lantai aktual)</li>
+        <li>Junction Hold ms → waktu all-black dianggap crossing lurus (default 80 ms)</li>
+        <li>Finish Hold ms → waktu all-black dianggap kotak finish (default 500 ms)</li>
       </ul>
     </div>
 
     <div class="gsec">
-      <h4><i class="fa-solid fa-plug"></i> Referensi Pin Hardware</h4>
-      <div class="formula">Motor Kiri  : AIN1=21  AIN2=22  PWMA=23
-Motor Kanan : BIN1=18  BIN2=5   PWMB=15
-Standby     : STBY=19  (harus HIGH agar motor jalan)
-Sensor      : S0=34 S1=35 S2=32 S3=33
-              S4=25 S5=26 S6=27 S7=14
-Start Btn   : GPIO0 (tombol BOOT bawaan ESP32)</div>
-      <div class="warn"><i class="fa-solid fa-triangle-exclamation"></i> GPIO37 &amp; GPIO38 hanya ada di ESP32-WROVER — tidak bisa bersamaan dengan WiFi.
-Jika sensor 6 atau 7 bermasalah, gunakan pin ADC1 (misal 36, 39) dan
-ubah array SENSOR_PINS di kode.</div>
-      <div class="tip">💡 ESP32 butuh regulator 3.3V/5V tersendiri dari baterai 7.4V LiPo.
-Gunakan buck converter + LDO sebelum VCC ESP32 & TB6612FNG.</div>
+      <h4>Kalibrasi Sensor</h4>
+      <p>Kalibrasi otomatis mengukur nilai ADC minimum (putih) dan maksimum (hitam) lalu menetapkan threshold di tengah untuk tiap sensor. Lakukan setiap kali pindah tempat atau pencahayaan berubah.</p>
     </div>
 
-  </div><!-- end card -->
-</div><!-- end guide page -->
+    <div class="gsec">
+      <h4>Mode Start</h4>
+      <ul>
+        <li>Web Mode → robot diam saat dinyalakan, START hanya dari tombol web (cocok kompetisi)</li>
+        <li>Direct Mode → robot langsung jalan saat ESP32 menyala</li>
+      </ul>
+    </div>
+
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
 <script>
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  WebSocket
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// WebSocket & Core (sama seperti sebelumnya)
 let wsock, reconnTimer;
 const chartData = new Array(120).fill(0);
 let chartCtx, chartW=0, chartH=0;
@@ -799,13 +848,13 @@ function wsClose() {
 }
 
 function send(cmd, extra={}) {
-  if (!wsock || wsock.readyState !== 1) { showToast('Belum terhubung'); return; }
+  if (!wsock || wsock.readyState !== 1) {
+    showToast('Belum terhubung ke robot');
+    return;
+  }
   wsock.send(JSON.stringify({ cmd, ...extra }));
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Message dispatcher
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function dispatch(d) {
   if      (d.type === 'sensor')      onSensor(d);
   else if (d.type === 'config')      onConfig(d);
@@ -814,27 +863,23 @@ function dispatch(d) {
   else if (d.type === 'toast')       showToast(d.msg);
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Sensor data handler
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Sensor handler
 let lastActiveCt = 0;
 function onSensor(d) {
-  // Sensor boxes
   let active = 0;
   for (let i = 0; i < 8; i++) {
     const el = document.getElementById('sb' + i);
     if (d.s[i]) { el.classList.add('on'); active++; }
-    else           el.classList.remove('on');
-    // ADC
+    else el.classList.remove('on');
+
     const ac = document.getElementById('adc' + i);
     if (ac && d.adc && d.adc[i] !== undefined) {
       ac.innerHTML = '<span class="alabel">S'+i+'</span>' + d.adc[i];
-      if (d.s[i]) ac.classList.add('on'); else ac.classList.remove('on');
+      d.s[i] ? ac.classList.add('on') : ac.classList.remove('on');
     }
   }
   lastActiveCt = active;
 
-  // Position indicator
   const pos = d.pos || 0;
   const pct = ((pos + 3500) / 7000 * 100);
   document.getElementById('posInd').style.left = Math.min(Math.max(pct, 1), 99) + '%';
@@ -843,37 +888,30 @@ function onSensor(d) {
   document.getElementById('corrVal').textContent = (d.corr || 0).toFixed(2);
   document.getElementById('activeVal').textContent = active;
 
-  // Motors
   const sA = d.sA || 0, sB = d.sB || 0;
   document.getElementById('mvA').textContent = Math.abs(sA);
   document.getElementById('mvB').textContent = Math.abs(sB);
-  document.getElementById('mdA').innerHTML = sA > 0 ? '<i class="fa-solid fa-arrow-up fa-xs"></i> MAJU' : sA < 0 ? '<i class="fa-solid fa-arrow-down fa-xs"></i> MUNDUR' : '<i class="fa-solid fa-minus fa-xs"></i> BERHENTI';
-  document.getElementById('mdB').innerHTML = sB > 0 ? '<i class="fa-solid fa-arrow-up fa-xs"></i> MAJU' : sB < 0 ? '<i class="fa-solid fa-arrow-down fa-xs"></i> MUNDUR' : '<i class="fa-solid fa-minus fa-xs"></i> BERHENTI';
+  document.getElementById('mdA').innerHTML = sA > 0 ? '↑ MAJU' : sA < 0 ? '↓ MUNDUR' : '— BERHENTI';
+  document.getElementById('mdB').innerHTML = sB > 0 ? '↑ MAJU' : sB < 0 ? '↓ MUNDUR' : '— BERHENTI';
   const bA = document.getElementById('mbA'), bB = document.getElementById('mbB');
   bA.style.width = (Math.abs(sA)/255*100) + '%';
   bB.style.width = (Math.abs(sB)/255*100) + '%';
   sA < 0 ? bA.classList.add('rev') : bA.classList.remove('rev');
   sB < 0 ? bB.classList.add('rev') : bB.classList.remove('rev');
 
-  // State badge
-  const STATES = { FOLLOW:'FOLLOW',STOPPED:'STOPPED',SPIN_L:'SPIN KIRI',
-                   SPIN_R:'SPIN KANAN',FINISH:'SELESAI!',CALIBRATE:'KALIBRASI' };
-  const SCLS   = { FOLLOW:'',STOPPED:'stopped',SPIN_L:'spin',SPIN_R:'spin',
-                   FINISH:'finish',CALIBRATE:'calib' };
+  const STATES = { FOLLOW:'FOLLOW',STOPPED:'STOPPED',SPIN_L:'SPIN KIRI',SPIN_R:'SPIN KANAN',FINISH:'SELESAI!',CALIBRATE:'KALIBRASI' };
+  const SCLS   = { FOLLOW:'',STOPPED:'stopped',SPIN_L:'spin',SPIN_R:'spin',FINISH:'finish',CALIBRATE:'calib' };
   const badge  = document.getElementById('stateBadge');
   badge.textContent = STATES[d.state] || d.state;
   badge.className   = 'badge ' + (SCLS[d.state] || '');
 
-  // System info
   document.getElementById('si-state').textContent  = STATES[d.state] || d.state;
   document.getElementById('si-mode').textContent   = d.mode === 'web' ? 'Web Mode' : 'Direct Mode';
   document.getElementById('si-calib').textContent  = d.calibrated ? 'Sudah dikalibrasi' : 'Belum kalibrasi';
 
-  // Mode buttons sync
   document.getElementById('modeWebBtn').classList.toggle('on', d.mode === 'web');
   document.getElementById('modeDirBtn').classList.toggle('on', d.mode === 'direct');
 
-  // Calib progress
   if (d.calibProgress !== undefined) {
     const pct2 = d.calibProgress;
     document.getElementById('calibProg').classList.add('show');
@@ -886,15 +924,11 @@ function onSensor(d) {
     }
   }
 
-  // Chart
   chartData.push(pos);
   if (chartData.length > 120) chartData.shift();
   drawChart();
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Config handler
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function onConfig(d) {
   function set(id, val) { const el=document.getElementById(id); if(el&&val!==undefined) el.value=val; }
   function setsv(key, val) { const el=document.getElementById('sv-'+key); if(el&&val!==undefined) el.textContent=val; }
@@ -902,34 +936,29 @@ function onConfig(d) {
   if (d.kp !== undefined) set('kp', parseFloat(d.kp).toFixed(3));
   if (d.ki !== undefined) set('ki', parseFloat(d.ki).toFixed(4));
   if (d.kd !== undefined) set('kd', parseFloat(d.kd).toFixed(3));
-  if (d.baseSpeed   !== undefined) { set('baseSpeed',   d.baseSpeed);   setsv('base', d.baseSpeed);  }
-  if (d.maxSpeed    !== undefined) { set('maxSpeed',    d.maxSpeed);    setsv('max',  d.maxSpeed);   }
-  if (d.spinSpeed   !== undefined) { set('spinSpeed',   d.spinSpeed);   setsv('spin', d.spinSpeed);  }
-  if (d.searchSpeed !== undefined) { set('searchSpeed', d.searchSpeed); setsv('srch', d.searchSpeed);}
-  if (d.spinTime    !== undefined) { set('spinTime',    d.spinTime);    setsv('spint',d.spinTime);   }
-  if (d.junction    !== undefined) { set('junction',    d.junction);    setsv('junc', d.junction);   }
-  if (d.finish      !== undefined) { set('finish',      d.finish);      setsv('fin',  d.finish);     }
+  if (d.baseSpeed   !== undefined) { set('baseSpeed', d.baseSpeed); setsv('base', d.baseSpeed); }
+  if (d.maxSpeed    !== undefined) { set('maxSpeed', d.maxSpeed); setsv('max', d.maxSpeed); }
+  if (d.spinSpeed   !== undefined) { set('spinSpeed', d.spinSpeed); setsv('spin', d.spinSpeed); }
+  if (d.searchSpeed !== undefined) { set('searchSpeed', d.searchSpeed); setsv('srch', d.searchSpeed); }
+  if (d.spinTime    !== undefined) { set('spinTime', d.spinTime); setsv('spint', d.spinTime); }
+  if (d.junction    !== undefined) { set('junction', d.junction); setsv('junc', d.junction); }
+  if (d.finish      !== undefined) { set('finish', d.finish); setsv('fin', d.finish); }
 
-  // system info panel
   if (d.kp !== undefined)
-    document.getElementById('si-pid').textContent =
-      parseFloat(d.kp).toFixed(3)+' / '+parseFloat(d.ki).toFixed(4)+' / '+parseFloat(d.kd).toFixed(3);
+    document.getElementById('si-pid').textContent = parseFloat(d.kp).toFixed(3)+' / '+parseFloat(d.ki).toFixed(4)+' / '+parseFloat(d.kd).toFixed(3);
   if (d.baseSpeed !== undefined)
     document.getElementById('si-speed').textContent = d.baseSpeed + ' / ' + d.maxSpeed;
   if (d.spinSpeed !== undefined)
     document.getElementById('si-spin').textContent = d.spinSpeed + ' / ' + d.spinTime + 'ms';
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Profiles
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function onProfiles(profiles) {
   const list = document.getElementById('pList');
   const lbl  = document.getElementById('pCountLbl');
-  lbl.textContent = (profiles && profiles.length > 0) ? profiles.length + '/' + 8 + ' tersimpan' : '';
+  lbl.textContent = (profiles && profiles.length > 0) ? profiles.length + '/8 tersimpan' : '';
 
   if (!profiles || profiles.length === 0) {
-    list.innerHTML = '<div style="text-align:center;color:var(--text2);font-size:.84rem;padding:18px"><i class="fa-solid fa-inbox" style="font-size:1.4rem;display:block;margin-bottom:5px;color:var(--g6)"></i>Belum ada profil tersimpan</div>';
+    list.innerHTML = '<div style="text-align:center;color:var(--text2);font-size:.84rem;padding:18px">Belum ada profil tersimpan</div>';
     return;
   }
   list.innerHTML = profiles.map((p, i) => `
@@ -942,8 +971,8 @@ function onProfiles(profiles) {
         </div>
       </div>
       <div class="pbtn-wrap">
-        <button class="pbtn pbtn-load" onclick="doLoadProfile(${i})"><i class='fa-solid fa-folder-open'></i> Load</button>
-        <button class="pbtn pbtn-del" onclick="doDelProfile(${i})"><i class='fa-solid fa-trash'></i></button>
+        <button class="pbtn pbtn-load" onclick="doLoadProfile(${i})">Load</button>
+        <button class="pbtn pbtn-del" onclick="doDelProfile(${i})">Hapus</button>
       </div>
     </div>
   `).join('');
@@ -951,30 +980,17 @@ function onProfiles(profiles) {
 
 function saveProfile() {
   const name = document.getElementById('pName').value.trim();
-  if (!name) { showToast('<i class="fa-solid fa-triangle-exclamation"></i> Masukkan nama profil'); return; }
+  if (!name) { showToast('Masukkan nama profil'); return; }
   send('saveProfile', { name });
   document.getElementById('pName').value = '';
   setTimeout(() => send('getProfiles'), 300);
-  showToast('<i class="fa-solid fa-floppy-disk"></i> Profil "' + name + '" disimpan!');
+  showToast('Profil "' + name + '" disimpan!');
 }
 
 function loadProfiles() { send('getProfiles'); }
+function doLoadProfile(idx) { send('loadProfile', { idx }); showToast('Profil dimuat!'); setTimeout(() => { send('getConfig'); gotoTab('settings'); }, 300); }
+function doDelProfile(idx) { send('deleteProfile', { idx }); setTimeout(() => send('getProfiles'), 300); showToast('Profil dihapus'); }
 
-function doLoadProfile(idx) {
-  send('loadProfile', { idx });
-  showToast('<i class="fa-solid fa-folder-open"></i> Profil dimuat!');
-  setTimeout(() => { send('getConfig'); gotoTab('settings'); }, 300);
-}
-
-function doDelProfile(idx) {
-  send('deleteProfile', { idx });
-  setTimeout(() => send('getProfiles'), 300);
-  showToast('<i class="fa-solid fa-trash"></i> Profil dihapus');
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Calibration
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function doCalib() {
   document.getElementById('btnCalib').disabled = true;
   document.getElementById('calibProg').classList.add('show');
@@ -990,35 +1006,23 @@ function onCalibResult(d) {
   document.getElementById('btnCalib').disabled = false;
   const el = document.getElementById('calibDone');
   el.style.display = 'block';
-  el.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--g3)"></i> Kalibrasi selesai! Threshold: ' + (d.thresholds || []).join(', ');
-  showToast('<i class="fa-solid fa-check"></i> Kalibrasi berhasil!');
+  el.innerHTML = 'Kalibrasi selesai! Threshold: ' + (d.thresholds || []).join(', ');
+  showToast('Kalibrasi berhasil!');
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Controls
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function doStart() {
-  send('start');
-  showToast('<i class="fa-solid fa-play"></i> Robot START!');
-}
-function doStop() {
-  send('stop');
-  showToast('<i class="fa-solid fa-stop"></i> Robot STOP!');
-}
+function doStart() { send('start'); showToast('Robot START!'); }
+function doStop() { send('stop'); showToast('Robot STOP!'); }
 
 function setMode(mode) {
   send('setMode', { mode });
   const desc = {
-    web:    '<strong>Web Mode:</strong> Robot menunggu perintah START dari halaman ini. Cocok untuk kompetisi.',
-    direct: '<strong>Direct Mode:</strong> Robot langsung jalan saat menyala. Tombol BOOT (GPIO0) toggle Start/Stop. Web tetap bisa STOP.'
+    web: '<strong>Web Mode:</strong> Robot menunggu perintah START dari halaman ini.',
+    direct: '<strong>Direct Mode:</strong> Robot langsung jalan saat menyala.'
   };
   document.getElementById('modeDesc').innerHTML = desc[mode] || '';
-  showToast('Mode: ' + (mode === 'web' ? 'Web' : 'Direct'));
+  showToast('Mode diubah ke ' + (mode === 'web' ? 'Web' : 'Direct'));
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Settings
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function sv(key, val) {
   document.getElementById('sv-' + key).textContent = val;
 }
@@ -1026,29 +1030,26 @@ function sv(key, val) {
 function applySettings() {
   const g = id => document.getElementById(id).value;
   const data = {
-    kp:          parseFloat(g('kp'))      || 0,
-    ki:          parseFloat(g('ki'))      || 0,
-    kd:          parseFloat(g('kd'))      || 0,
-    baseSpeed:   parseInt(g('baseSpeed')) || 150,
-    maxSpeed:    parseInt(g('maxSpeed'))  || 200,
-    spinSpeed:   parseInt(g('spinSpeed')) || 130,
+    kp: parseFloat(g('kp')) || 0,
+    ki: parseFloat(g('ki')) || 0,
+    kd: parseFloat(g('kd')) || 0,
+    baseSpeed: parseInt(g('baseSpeed')) || 150,
+    maxSpeed: parseInt(g('maxSpeed')) || 200,
+    spinSpeed: parseInt(g('spinSpeed')) || 130,
     searchSpeed: parseInt(g('searchSpeed')) || 70,
-    spinTime:    parseInt(g('spinTime'))  || 350,
-    junction:    parseInt(g('junction'))  || 80,
-    finish:      parseInt(g('finish'))    || 500,
+    spinTime: parseInt(g('spinTime')) || 350,
+    junction: parseInt(g('junction')) || 80,
+    finish: parseInt(g('finish')) || 500,
   };
   send('setConfig', data);
-  showToast('<i class="fa-solid fa-check"></i> Settings disimpan!');
+  showToast('Settings disimpan!');
 }
 
 function refreshSettings() {
   send('getConfig');
-  showToast('<i class="fa-solid fa-rotate"></i> Refresh...');
+  showToast('Refresh...');
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Chart (canvas)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function initChart() {
   const c = document.getElementById('chart');
   if (!c) return;
@@ -1065,27 +1066,21 @@ function drawChart() {
   if (!chartCtx || !chartW) return;
   const w = chartW, h = chartH;
   chartCtx.clearRect(0, 0, w, h);
-
-  // bg
   chartCtx.fillStyle = '#f1f8f2';
   chartCtx.fillRect(0, 0, w, h);
 
-  // grid
   chartCtx.strokeStyle = '#c8e6c9';
   chartCtx.lineWidth = 0.5;
   for (let i = 1; i <= 3; i++) {
     const y = (i / 4) * h;
     chartCtx.beginPath(); chartCtx.moveTo(0,y); chartCtx.lineTo(w,y); chartCtx.stroke();
   }
-
-  // zero line
   chartCtx.strokeStyle = '#81c784';
   chartCtx.lineWidth = 1;
   chartCtx.setLineDash([5,5]);
   chartCtx.beginPath(); chartCtx.moveTo(0,h/2); chartCtx.lineTo(w,h/2); chartCtx.stroke();
   chartCtx.setLineDash([]);
 
-  // data
   const n = chartData.length;
   if (n < 2) return;
   chartCtx.strokeStyle = '#1b5e20';
@@ -1097,30 +1092,31 @@ function drawChart() {
     i === 0 ? chartCtx.moveTo(x,y) : chartCtx.lineTo(x,y);
   }
   chartCtx.stroke();
-
-  // labels
-  chartCtx.fillStyle = '#388e3c';
-  chartCtx.font = '10px sans-serif';
-  chartCtx.fillText('+3500', 3, 12);
-  chartCtx.fillText('  0',   3, h/2 + 4);
-  chartCtx.fillText('-3500', 3, h - 3);
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Tab navigation
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const TAB_IDS = ['monitor','control','settings','profiles','guide'];
+
 function gotoTab(name) {
   TAB_IDS.forEach((t,i) => {
     document.getElementById('pg-'+t).classList.toggle('on', t===name);
-    document.querySelectorAll('.tab')[i].classList.toggle('on', t===name);
+    const mainTabs = document.querySelectorAll('.tabs .tab');
+    if (mainTabs[i]) mainTabs[i].classList.toggle('on', t===name);
+    const sidenavTabs = document.querySelectorAll('.sidenav .tab');
+    if (sidenavTabs[i]) sidenavTabs[i].classList.toggle('on', t===name);
   });
   if (name === 'monitor') setTimeout(() => { initChart(); drawChart(); }, 30);
+  closeNav();
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Helpers
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function openNav() {
+  document.getElementById("mySidenav").style.width = "250px";
+  document.getElementById("overlay").style.display = "block";
+}
+function closeNav() {
+  document.getElementById("mySidenav").style.width = "0";
+  document.getElementById("overlay").style.display = "none";
+}
+
 function setDot(on) {
   document.getElementById('wsDot').classList.toggle('on', on);
 }
@@ -1138,12 +1134,10 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Init
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 window.addEventListener('load', () => {
   initChart();
   connectWS();
+  gotoTab('monitor');
 });
 window.addEventListener('resize', () => { initChart(); drawChart(); });
 </script>
