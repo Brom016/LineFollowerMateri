@@ -1,0 +1,982 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <QuickPID.h>
+
+// ─────────────────────────────────────────────
+//  PIN MOTOR (TB6612FNG)
+// ─────────────────────────────────────────────
+#define PWMA  16
+#define AIN1  17
+#define AIN2   5
+#define STBY  18
+#define BIN1  19
+#define BIN2  21
+#define PWMB  22
+
+// ─────────────────────────────────────────────
+//  PIN SENSOR  (semua ADC1 → aman saat WiFi ON)
+// ─────────────────────────────────────────────
+#define S1  36   // ADC1_CH0
+#define S2  39   // ADC1_CH3
+#define S3  34   // ADC1_CH6
+#define S4  35   // ADC1_CH7
+#define S5  32   // ADC1_CH4
+#define S6  33   // ADC1_CH5
+
+const int SENSOR_PINS[6] = {S1, S2, S3, S4, S5, S6};
+
+// Bobot posisi: S1(kiri jauh)=-5 … S6(kanan jauh)=+5
+const float WEIGHT[6] = {-5.0f, -3.0f, -1.0f, 1.0f, 3.0f, 5.0f};
+
+// ─────────────────────────────────────────────
+//  PWM  (ESP32 Arduino Core v3.x)
+// ─────────────────────────────────────────────
+#define PWM_FREQ   10000   // 10 kHz
+#define PWM_RES        8   // 8-bit → 0–255
+
+// ─────────────────────────────────────────────
+//  PARAMETER KECEPATAN (bisa diubah dari Web UI)
+// ─────────────────────────────────────────────
+int baseNormal  = 90;   // PWM saat lurus
+int baseSharp   = 70;   // PWM saat tikungan tajam
+int maxSpeed    = 120;  // batas atas output PID
+int searchSpeed = 75;   // PWM saat cari garis (spin)
+
+// ─────────────────────────────────────────────
+//  KALIBRASI SENSOR
+// ─────────────────────────────────────────────
+#define ADC_MAX        4095
+#define CALIB_TIME_MS  5000
+#define SAMPLES           4
+#define THRESH_FACTOR  0.55f
+
+int sensorMin[6];
+int sensorMax[6];
+int sensorThreshold[6];
+int sensorVal[6];
+int rawVals[6];
+
+// ─────────────────────────────────────────────
+//  PID
+// ─────────────────────────────────────────────
+float pidInput = 0.0f, pidOutput = 0.0f, pidSetpoint = 0.0f;
+float Kp = 22.0f, Ki = 0.05f, Kd = 20.0f;
+
+QuickPID pid(
+  &pidInput, &pidOutput, &pidSetpoint,
+  Kp, Ki, Kd,
+  QuickPID::pMode::pOnError,
+  QuickPID::dMode::dOnMeas,
+  QuickPID::iAwMode::iAwClamp,
+  QuickPID::Action::direct
+);
+
+// ─────────────────────────────────────────────
+//  STATE MESIN
+// ─────────────────────────────────────────────
+float lastPos        = 0.0f;
+bool  robotRunning   = false;
+bool  isCalibrating  = false;
+unsigned long calibStart = 0;
+bool  priorityLeft   = true;
+
+int    motorL_val    = 0;
+int    motorR_val    = 0;
+String robotStateStr = "IDLE";
+String statusMessage = "";
+
+// ─────────────────────────────────────────────
+//  WiFi & Web Server
+// ─────────────────────────────────────────────
+const char* AP_SSID = "LineFollower";
+const char* AP_PASS = "robot1234";
+WebServer server(80);
+Preferences prefs;
+
+// ═══════════════════════════════════════════════════════════════
+//  HTML WEB UI (dengan JavaScript yang sudah diperbaiki)
+// ═══════════════════════════════════════════════════════════════
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Line Follower PID</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e8f5e9;--panel:#fff;--border:#c8e6c9;--accent:#4caf50;--accent2:#8bc34a;--green:#388e3c;--warn:#ff9800;--danger:#ef4444;--text:#212121;--muted:#757575;--mono:'Share Tech Mono',monospace;--sans:'Barlow',sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;padding-bottom:40px;}
+header{background:linear-gradient(135deg,#4caf50,#2e7d32);border-bottom:2px solid var(--accent2);padding:16px 20px 12px;position:sticky;top:0;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.15);}
+header h1{font-family:var(--mono);font-size:1.05rem;color:#fff;letter-spacing:.1em;text-transform:uppercase;}
+header p{font-size:.68rem;color:rgba(255,255,255,.85);margin-top:3px;font-family:var(--mono);}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#69f0ae;box-shadow:0 0 6px #69f0ae;margin-right:6px;animation:blink 2s infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+.tab-nav{display:flex;background:var(--panel);border-bottom:2px solid var(--border);overflow-x:auto;scrollbar-width:none;}
+.tab-nav::-webkit-scrollbar{display:none;}
+.tab-btn{flex:1;min-width:72px;padding:14px 6px;background:none;border:none;border-bottom:3px solid transparent;color:var(--muted);font-family:var(--mono);font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;transition:.2s;white-space:nowrap;}
+.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);}
+.tab-panel{display:none;padding:14px;}
+.tab-panel.active{display:block;}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+.card-title{font-family:var(--mono);font-size:.7rem;color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:8px;}
+.card-title::before{content:'';display:inline-block;width:3px;height:14px;background:var(--accent);border-radius:2px;}
+.param-row{margin-bottom:16px;}
+.param-label{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;}
+.param-name{font-family:var(--mono);font-size:.9rem;}
+.param-badge{font-family:var(--mono);font-size:.75rem;color:var(--accent2);background:rgba(139,195,74,.12);padding:2px 10px;border-radius:4px;border:1px solid rgba(139,195,74,.3);min-width:72px;text-align:center;}
+.num-input{width:100%;background:#f1f8f1;border:1px solid var(--border);border-radius:8px;color:var(--green);font-family:var(--mono);font-size:1.4rem;padding:10px 14px;text-align:center;transition:.2s;}
+.num-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(76,175,80,.12);}
+.slider-wrap{display:flex;align-items:center;gap:10px;margin-top:8px;}
+input[type=range]{flex:1;height:4px;background:var(--border);border-radius:2px;outline:none;-webkit-appearance:none;}
+input[type=range]::-webkit-slider-thumb{width:22px;height:22px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px rgba(76,175,80,.5);cursor:pointer;-webkit-appearance:none;}
+.slider-end{font-family:var(--mono);font-size:.65rem;color:var(--muted);min-width:28px;text-align:center;}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;}
+.toggle-label{font-size:.85rem;}
+.toggle{position:relative;width:48px;height:26px;}
+.toggle input{opacity:0;width:0;height:0;}
+.toggle-track{position:absolute;inset:0;background:#ccc;border-radius:13px;cursor:pointer;transition:.2s;}
+.toggle input:checked + .toggle-track{background:var(--accent);}
+.toggle-track::before{content:'';position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3);}
+.toggle input:checked + .toggle-track::before{transform:translateX(22px);}
+.btn{width:100%;padding:14px;border:none;border-radius:8px;font-family:var(--mono);font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;transition:.15s;margin-bottom:9px;font-weight:700;}
+.btn:active{transform:scale(.97);}
+.btn-primary{background:var(--accent);color:#fff;}
+.btn-danger{background:transparent;color:var(--danger);border:2px solid var(--danger);}
+.btn-warn{background:transparent;color:var(--warn);border:2px solid var(--warn);}
+.btn-secondary{background:transparent;color:var(--green);border:2px solid var(--green);}
+.sensor-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:12px;}
+.sensor-cell{display:flex;flex-direction:column;align-items:center;gap:4px;}
+.sensor-bar-wrap{width:100%;height:70px;background:#f0f4f0;border:1px solid var(--border);border-radius:4px;overflow:hidden;display:flex;align-items:flex-end;position:relative;}
+.sensor-bar{width:100%;background:#bdbdbd;transition:height .1s,background .1s;}
+.sensor-bar.active{background:var(--accent);}
+.sensor-lbl{font-family:var(--mono);font-size:.62rem;color:var(--muted);}
+.readout-row{display:flex;gap:10px;margin-bottom:12px;}
+.readout-box{flex:1;background:#f1f8f1;border:1px solid var(--border);border-radius:8px;padding:10px 6px;text-align:center;}
+.readout-val{font-family:var(--mono);font-size:1.1rem;color:var(--accent2);font-weight:700;}
+.readout-lbl{font-family:var(--mono);font-size:.58rem;color:var(--muted);margin-top:3px;}
+.state-badge{display:inline-block;font-family:var(--mono);font-size:.8rem;padding:6px 16px;border-radius:20px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;}
+.st-FOLLOW{background:rgba(57,255,20,.15);color:#2e7d32;border:1px solid rgba(57,255,20,.5);}
+.st-SEARCH_L,.st-SEARCH_R{background:rgba(255,152,0,.15);color:#e65100;border:1px solid rgba(255,152,0,.5);}
+.st-CALIB{background:rgba(0,229,255,.12);color:#0277bd;border:1px solid rgba(0,229,255,.5);}
+.st-IDLE{background:rgba(239,68,68,.12);color:#c62828;border:1px solid rgba(239,68,68,.4);}
+.info-box{background:#fff9e6;border:1px solid #ffe082;border-radius:8px;padding:12px;margin-bottom:12px;font-size:.8rem;color:#7b5800;font-family:var(--mono);line-height:1.6;}
+.guide-text{font-size:.85rem;line-height:1.75;color:var(--text);}
+.tuning-table{width:100%;border-collapse:collapse;font-size:.82rem;font-family:var(--mono);margin-top:8px;}
+.tuning-table th{background:var(--accent);color:#fff;padding:8px 6px;text-align:left;}
+.tuning-table td{padding:8px 6px;border-bottom:1px solid var(--border);}
+.tuning-table tr:nth-child(even) td{background:#f9fbe7;}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:#fff;color:var(--text);font-family:var(--mono);font-size:.8rem;padding:10px 20px;border-radius:8px;border:1px solid var(--border);box-shadow:0 4px 20px rgba(0,0,0,.12);transition:.3s;z-index:999;white-space:nowrap;}
+#toast.show{transform:translateX(-50%) translateY(0);}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot"></span>Line Follower — PID Tuner</h1>
+  <p id="hdr-status">Menghubungkan ke robot...</p>
+</header>
+
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="pid">PID</button>
+  <button class="tab-btn" data-tab="speed">Speed</button>
+  <button class="tab-btn" data-tab="live">Live</button>
+  <button class="tab-btn" data-tab="option">Option</button>
+  <button class="tab-btn" data-tab="guide">Guide</button>
+</nav>
+
+<!-- TAB PID -->
+<div id="tab-pid" class="tab-panel active">
+  <div class="info-box">Titik awal untuk lintasan garis 2 cm: Kp=22 · Ki=0.05 · Kd=20</div>
+  <div class="card">
+    <div class="card-title">Proportional — Kp</div>
+    <div class="param-row">
+      <div class="param-label"><span class="param-name">Kp</span><span class="param-badge" id="kp-badge">22.00</span></div>
+      <input class="num-input" type="number" id="kp-val" value="22" step="0.01" oninput="syncFromInput('kp')">
+      <div class="slider-wrap"><span class="slider-end">0</span><input type="range" id="kp-slider" min="0" max="60" step="0.01" value="22" oninput="syncFromSlider('kp')"><span class="slider-end">60</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Integral — Ki</div>
+    <div class="param-row">
+      <div class="param-label"><span class="param-name">Ki</span><span class="param-badge" id="ki-badge">0.050</span></div>
+      <input class="num-input" type="number" id="ki-val" value="0.05" step="0.001" oninput="syncFromInput('ki')">
+      <div class="slider-wrap"><span class="slider-end">0</span><input type="range" id="ki-slider" min="0" max="5" step="0.001" value="0.05" oninput="syncFromSlider('ki')"><span class="slider-end">5</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Derivative — Kd</div>
+    <div class="param-row">
+      <div class="param-label"><span class="param-name">Kd</span><span class="param-badge" id="kd-badge">20.00</span></div>
+      <input class="num-input" type="number" id="kd-val" value="20" step="0.01" oninput="syncFromInput('kd')">
+      <div class="slider-wrap"><span class="slider-end">0</span><input type="range" id="kd-slider" min="0" max="60" step="0.01" value="20" oninput="syncFromSlider('kd')"><span class="slider-end">60</span></div>
+    </div>
+  </div>
+  <button class="btn btn-primary" onclick="applyPID()">✔ TERAPKAN PID</button>
+  <button class="btn btn-danger" onclick="resetPID()">✖ RESET KE 0</button>
+</div>
+
+<!-- TAB SPEED -->
+<div id="tab-speed" class="tab-panel">
+  <div class="card">
+    <div class="card-title">Kecepatan Motor</div>
+    <div class="param-row">
+      <div class="param-label"><span class="param-name">Base Speed Normal</span><span class="param-badge" id="bn-badge">90</span></div>
+      <input class="num-input" type="number" id="bn-val" value="90" oninput="syncFromInput('bn')">
+      <div class="slider-wrap"><span class="slider-end">0</span><input type="range" id="bn-slider" min="0" max="255" value="90" oninput="syncFromSlider('bn')"><span class="slider-end">255</span></div>
+    </div>
+    <div class="param-row">
+      <div class="param-label"><span class="param-name">Base Speed Tikungan</span><span class="param-badge" id="bs-badge">70</span></div>
+      <input class="num-input" type="number" id="bs-val" value="70" oninput="syncFromInput('bs')">
+      <div class="slider-wrap"><span class="slider-end">0</span><input type="range" id="bs-slider" min="0" max="255" value="70" oninput="syncFromSlider('bs')"><span class="slider-end">255</span></div>
+    </div>
+    <div class="param-row">
+      <div class="param-label"><span class="param-name">Max Speed (PID Limit)</span><span class="param-badge" id="ms-badge">120</span></div>
+      <input class="num-input" type="number" id="ms-val" value="120" oninput="syncFromInput('ms')">
+      <div class="slider-wrap"><span class="slider-end">0</span><input type="range" id="ms-slider" min="0" max="255" value="120" oninput="syncFromSlider('ms')"><span class="slider-end">255</span></div>
+    </div>
+    <div class="param-row">
+      <div class="param-label"><span class="param-name">Search Speed (Spin)</span><span class="param-badge" id="ss-badge">75</span></div>
+      <input class="num-input" type="number" id="ss-val" value="75" oninput="syncFromInput('ss')">
+      <div class="slider-wrap"><span class="slider-end">0</span><input type="range" id="ss-slider" min="0" max="255" value="75" oninput="syncFromSlider('ss')"><span class="slider-end">255</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Prioritas Persimpangan</div>
+    <div class="toggle-row">
+      <span class="toggle-label">Belok Kiri di Persimpangan (semua sensor ON)</span>
+      <label class="toggle"><input type="checkbox" id="priority-left" checked><span class="toggle-track"></span></label>
+    </div>
+  </div>
+  <button class="btn btn-primary" onclick="applySpeed()">✔ TERAPKAN SPEED</button>
+</div>
+
+<!-- TAB LIVE -->
+<div id="tab-live" class="tab-panel">
+  <div class="card">
+    <div class="card-title">Status Robot</div>
+    <div style="text-align:center;margin-bottom:14px;"><span class="state-badge st-IDLE" id="state-badge">IDLE</span></div>
+    <div class="readout-row">
+      <div class="readout-box"><div class="readout-val" id="live-err">0.00</div><div class="readout-lbl">Error / Posisi</div></div>
+      <div class="readout-box"><div class="readout-val" id="live-ml">0</div><div class="readout-lbl">Motor Kiri</div></div>
+      <div class="readout-box"><div class="readout-val" id="live-mr">0</div><div class="readout-lbl">Motor Kanan</div></div>
+    </div>
+    <div class="readout-row">
+      <div class="readout-box"><div class="readout-val" id="live-kp">22.00</div><div class="readout-lbl">Kp Aktif</div></div>
+      <div class="readout-box"><div class="readout-val" id="live-ki">0.050</div><div class="readout-lbl">Ki Aktif</div></div>
+      <div class="readout-box"><div class="readout-val" id="live-kd">20.00</div><div class="readout-lbl">Kd Aktif</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Sensor Raw ADC</div>
+    <div class="sensor-grid" id="sensor-grid"></div>
+  </div>
+  <button class="btn btn-primary" onclick="calibrate()">MULAI KALIBRASI (5 detik)</button>
+  <button class="btn btn-secondary" onclick="saveCalib()">SIMPAN KALIBRASI</button>
+  <button class="btn btn-secondary" onclick="loadCalib()">LOAD KALIBRASI</button>
+  <button class="btn btn-warn" onclick="clearCalib()">HAPUS DATA KALIBRASI</button>
+  <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">
+  <button class="btn btn-primary" onclick="startRobot()">▶ MULAI ROBOT</button>
+  <button class="btn btn-danger" onclick="stopRobot()">■ HENTIKAN ROBOT</button>
+</div>
+
+<!-- TAB OPTION -->
+<div id="tab-option" class="tab-panel">
+  <div class="card">
+    <div class="card-title">Simpan & Load Semua Setting</div>
+    <button class="btn btn-primary" onclick="saveAll()">SIMPAN SEMUA SETTING</button>
+    <button class="btn btn-secondary" onclick="loadAll()">LOAD SEMUA SETTING</button>
+  </div>
+  <div class="card">
+    <div class="card-title">Info Koneksi</div>
+    <div style="font-family:var(--mono);font-size:.85rem;line-height:2;">
+      SSID : <strong>LineFollower</strong><br>
+      PASS : <strong>robot1234</strong><br>
+      IP   : <strong>192.168.4.1</strong>
+    </div>
+  </div>
+</div>
+
+<!-- TAB GUIDE -->
+<!-- TAB GUIDE - VERSI DIPERBAIKI -->
+<div id="tab-guide" class="tab-panel">
+
+  <!-- HEADER -->
+  <div class="card">
+    <div class="card-title">📘 Panduan Lengkap Line Follower PID</div>
+    <p class="guide-text" style="font-size:0.9rem; line-height:1.7;">
+      Selamat datang di <strong>PID Tuner</strong>. Halaman ini akan membantu kamu memahami konsep PID dan cara menyetel robot agar cepat, stabil, dan lincah.
+    </p>
+  </div>
+
+  <!-- PID OVERVIEW -->
+  <div class="card">
+    <div class="card-title">🔬 Apa Itu PID?</div>
+    <p class="guide-text">
+      PID (Proportional – Integral – Derivative) adalah algoritma kontrol yang membuat robot tetap mengikuti garis dengan akurat.
+    </p>
+    
+    <table class="tuning-table">
+      <tr>
+        <th>Parameter</th>
+        <th>Peran</th>
+        <th>Analogi</th>
+      </tr>
+      <tr>
+        <td><strong>Kp</strong></td>
+        <td>Kecepatan reaksi utama</td>
+        <td>Semakin besar = robot semakin agresif belok</td>
+      </tr>
+      <tr>
+        <td><strong>Ki</strong></td>
+        <td>Memperbaiki kesalahan jangka panjang (drift)</td>
+        <td>Membantu jika robot selalu condong ke satu sisi</td>
+      </tr>
+      <tr>
+        <td><strong>Kd</strong></td>
+        <td>Redam getaran / zig-zag</td>
+        <td>Seperti peredam shockbreaker</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ALUR KERJA -->
+  <div class="card">
+    <div class="card-title">🔄 Alur Kerja Robot</div>
+    <ol class="step-list" style="padding-left:20px; line-height:2;">
+      <li><strong>1.</strong> Membaca nilai 6 sensor</li>
+      <li><strong>2.</strong> Menghitung posisi garis (error)</li>
+      <li><strong>3.</strong> Menghitung koreksi PID</li>
+      <li><strong>4.</strong> Menyesuaikan kecepatan motor kiri & kanan</li>
+      <li><strong>5.</strong> Mengulang proses dengan cepat (loop kontrol)</li>
+    </ol>
+  </div>
+
+  <!-- QUICK TUNING -->
+  <div class="card">
+    <div class="card-title">⚡ Cara Tuning Cepat (Rekomendasi)</div>
+    <ul class="step-list">
+      <li><span class="step-num">1</span> Set <strong>Ki = 0</strong> dan <strong>Kd = 0</strong></li>
+      <li><span class="step-num">2</span> Naikkan <strong>Kp</strong> sampai robot mulai <strong>zig-zag</strong></li>
+      <li><span class="step-num">3</span> Naikkan <strong>Kd</strong> sampai zig-zag hilang / berkurang</li>
+      <li><span class="step-num">4</span> Tambahkan <strong>Ki kecil</strong> (0.02 – 0.08) jika masih ada drift</li>
+      <li><span class="step-num">5</span> Naikkan speed → ulangi tuning jika perlu</li>
+    </ul>
+    
+    <div class="tip-box">
+      <strong>Rule praktis:</strong> Kd ≈ 0.6 – 1.2 × Kp<br>
+      Ki biasanya sangat kecil atau 0 untuk lintasan sederhana.
+    </div>
+  </div>
+
+  <!-- TROUBLESHOOTING -->
+  <div class="card">
+    <div class="card-title">🛠 Diagnosa & Solusi Cepat</div>
+    <table class="tuning-table">
+      <tr><th>Masalah</th><th>Penyebab Umum</th><th>Solusi</th></tr>
+      <tr><td>Zig-zag / Goyang</td><td>Kp terlalu besar</td><td>Turunkan Kp, naikkan Kd</td></tr>
+      <tr><td>Lambat masuk tikungan</td><td>Kp terlalu kecil</td><td>Naikkan Kp</td></tr>
+      <tr><td>Keluar di tikungan</td><td>Speed terlalu tinggi</td><td>Turunkan Base Speed Tikungan</td></tr>
+      <tr><td>Selalu condong ke satu sisi</td><td>Sensor tidak simetris / drift</td><td>Kalibrasi + tambah Ki kecil</td></tr>
+      <tr><td>Berhenti di persimpangan</td><td>Threshold sensor kurang</td><td>Lakukan kalibrasi ulang</td></tr>
+    </table>
+  </div>
+
+  <!-- SPEED GUIDE -->
+  <div class="card">
+    <div class="card-title">🏎️ Kecepatan vs Stabilitas</div>
+    <table class="tuning-table">
+      <tr><th>Level</th><th>Base Speed</th><th>Karakter</th><th>Rekomendasi</th></tr>
+      <tr><td>Pemula</td><td>80 – 100</td><td>Sangat stabil</td><td>Mudah tuning</td></tr>
+      <tr><td>Normal</td><td>110 – 140</td><td>Seimbang</td><td>Kd sedang</td></tr>
+      <tr><td>Balap</td><td>150 – 200+</td><td>Cepat tapi sensitif</td><td>Butuh tuning teliti</td></tr>
+    </table>
+  </div>
+
+  <!-- STARTING POINT -->
+  <div class="card">
+    <div class="card-title">🚀 Titik Awal yang Bagus</div>
+    <table class="tuning-table">
+      <tr><th>Kategori</th><th>Kp</th><th>Ki</th><th>Kd</th><th>Base Speed</th></tr>
+      <tr><td><strong>Awal / Belajar</strong></td><td>18</td><td>0.00</td><td>12</td><td>90</td></tr>
+      <tr><td><strong>Normal (Rekomendasi)</strong></td><td>24</td><td>0.05</td><td>22</td><td>110</td></tr>
+      <tr><td><strong>Balap</strong></td><td>32</td><td>0.08</td><td>28</td><td>145</td></tr>
+    </table>
+    
+    <div class="tip-box" style="margin-top:12px;">
+      Mulai dari nilai Normal di atas, lalu sesuaikan sesuai robot dan lintasan kamu.
+    </div>
+  </div>
+
+  <div class="card" style="background:#f1f8f1; border-color:#81c784;">
+    <div class="card-title" style="color:#2e7d32;">💡 Tips Terakhir</div>
+    <ul class="guide-text" style="padding-left:20px;">
+      <li>Selalu lakukan <strong>kalibrasi</strong> sebelum tuning</li>
+      <li>Sensor harus bersih dan terpasang simetris</li>
+      <li>Jangan terlalu agresif menaikkan Kp di awal</li>
+      <li>Test di lintasan yang sama saat tuning</li>
+    </ul>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+
+  const FMT = { kp:'f2', ki:'f3', kd:'f2', bn:'i', bs:'i', ms:'i', ss:'i' };
+
+  function fmt(id, val) {
+    val = parseFloat(val) || 0;
+    if (FMT[id]==='f3') return val.toFixed(3);
+    if (FMT[id]==='f2') return val.toFixed(2);
+    return Math.round(val).toString();
+  }
+
+  window.syncFromInput = function(id) {
+    const input = document.getElementById(id + '-val');
+    const slider = document.getElementById(id + '-slider');
+    const badge = document.getElementById(id + '-badge');
+    if(input && slider && badge){
+      slider.value = input.value;
+      badge.textContent = fmt(id, input.value);
+    }
+  };
+
+  window.syncFromSlider = function(id) {
+    const input = document.getElementById(id + '-val');
+    const slider = document.getElementById(id + '-slider');
+    const badge = document.getElementById(id + '-badge');
+    if(input && slider && badge){
+      input.value = slider.value;
+      badge.textContent = fmt(id, slider.value);
+    }
+  };
+
+  // Tab Navigation
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', function(e){
+      e.preventDefault();
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  let toastTimer;
+  window.toast = function(msg, ok = true) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.color = ok ? 'var(--green)' : 'var(--danger)';
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+  };
+
+  async function post(url, params) {
+    try {
+      const r = await fetch(url, {method:'POST', body: new URLSearchParams(params)});
+      return r.ok;
+    } catch(e) { return false; }
+  }
+
+  // === SEMUA TOMBOL GLOBAL ===
+  window.applyPID = async function() {
+    const ok = await post('/set_pid', {kp: document.getElementById('kp-val').value, ki: document.getElementById('ki-val').value, kd: document.getElementById('kd-val').value});
+    window.toast(ok ? '✔ PID diterapkan' : '✖ Koneksi gagal', ok);
+  };
+
+  window.resetPID = async function() {
+    ['kp','ki','kd'].forEach(id => {
+      document.getElementById(id+'-val').value = '0';
+      document.getElementById(id+'-slider').value = '0';
+      document.getElementById(id+'-badge').textContent = '0';
+    });
+    const ok = await post('/set_pid', {kp:0, ki:0, kd:0});
+    window.toast(ok ? '✔ PID direset' : '✖ Gagal', ok);
+  };
+
+  window.applySpeed = async function() {
+    const ok = await post('/set_speed', {
+      base_normal: document.getElementById('bn-val').value,
+      base_sharp: document.getElementById('bs-val').value,
+      max_speed: document.getElementById('ms-val').value,
+      search_speed: document.getElementById('ss-val').value,
+      priority_left: document.getElementById('priority-left').checked ? '1' : '0'
+    });
+    window.toast(ok ? '✔ Speed diterapkan' : '✖ Gagal', ok);
+  };
+
+  window.startRobot = async function()  { const ok = await post('/start');  window.toast(ok ? '▶ Robot dimulai' : '✖ Gagal', ok); };
+  window.stopRobot  = async function()  { const ok = await post('/stop');   window.toast(ok ? '■ Robot dihentikan' : '✖ Gagal', ok); };
+  window.calibrate  = async function()  { const ok = await post('/calibrate'); window.toast(ok ? '📐 Kalibrasi dimulai... gerakkan robot!' : '✖ Gagal', ok); };
+  window.saveCalib  = async function()  { const ok = await post('/save_calib'); window.toast(ok ? '💾 Kalibrasi disimpan' : '✖ Gagal', ok); };
+  window.loadCalib  = async function()  { const ok = await post('/load_calib'); window.toast(ok ? '📤 Kalibrasi dimuat' : '✖ Gagal', ok); };
+  window.clearCalib = async function()  {
+    if(confirm('Hapus semua data kalibrasi?')) {
+      const ok = await post('/clear_calib');
+      window.toast(ok ? '🗑 Kalibrasi dihapus' : '✖ Gagal', ok);
+    }
+  };
+  window.saveAll = async function() { const ok = await post('/save_settings'); window.toast(ok ? '💾 Semua setting disimpan' : '✖ Gagal', ok); };
+  window.loadAll = async function() {
+    const ok = await post('/load_settings');
+    window.toast(ok ? '📤 Setting dimuat' : '✖ Gagal', ok);
+    if(ok) syncUIFromStatus();
+  };
+
+  // Sensor Grid
+  (function(){
+    const grid = document.getElementById('sensor-grid');
+    if(grid) {
+      grid.innerHTML = '';
+      for(let i=0; i<6; i++){
+        grid.innerHTML += `<div class="sensor-cell"><div class="sensor-bar-wrap"><div class="sensor-bar" id="sb-${i}" style="height:0%"></div></div><span class="sensor-lbl">S${i+1}</span></div>`;
+      }
+    }
+  })();
+
+  // Poll Status
+  var STATE_CLS = {'FOLLOW':'st-FOLLOW','SEARCH_L':'st-SEARCH_L','SEARCH_R':'st-SEARCH_R','CALIB':'st-CALIB','IDLE':'st-IDLE'};
+  var lastMsg = '';
+  async function pollStatus() {
+    try {
+      const r = await fetch('/status');
+      const d = await r.json();
+      document.getElementById('hdr-status').textContent = `IP:192.168.4.1  Kp:${parseFloat(d.kp).toFixed(2)} Ki:${parseFloat(d.ki).toFixed(3)} Kd:${parseFloat(d.kd).toFixed(2)}`;
+      const badge = document.getElementById('state-badge');
+      badge.textContent = d.state;
+      badge.className = 'state-badge ' + (STATE_CLS[d.state] || 'st-IDLE');
+      document.getElementById('live-err').textContent = parseFloat(d.error).toFixed(2);
+      document.getElementById('live-ml').textContent = d.motorL;
+      document.getElementById('live-mr').textContent = d.motorR;
+      document.getElementById('live-kp').textContent = parseFloat(d.kp).toFixed(2);
+      document.getElementById('live-ki').textContent = parseFloat(d.ki).toFixed(3);
+      document.getElementById('live-kd').textContent = parseFloat(d.kd).toFixed(2);
+
+      if(d.sensors){
+        d.sensors.forEach((v,i) => {
+          const bar = document.getElementById('sb-'+i);
+          if(bar){
+            const pct = Math.min(100, v / 40.95);
+            bar.style.height = pct + '%';
+            const active = d.sensorActive && d.sensorActive[i];
+            bar.className = 'sensor-bar' + (active ? ' active' : '');
+          }
+        });
+      }
+      if(d.message && d.message !== lastMsg){
+        window.toast(d.message);
+        lastMsg = d.message;
+      }
+    } catch(e){}
+  }
+
+  async function syncUIFromStatus() {
+    try {
+      const r = await fetch('/status');
+      const d = await r.json();
+      const set = (id,val) => {
+        const v = document.getElementById(id+'-val');
+        const s = document.getElementById(id+'-slider');
+        const b = document.getElementById(id+'-badge');
+        if(v) v.value = val;
+        if(s) s.value = val;
+        if(b) b.textContent = fmt(id,val);
+      };
+      set('kp',d.kp); set('ki',d.ki); set('kd',d.kd);
+      set('bn',d.baseNormal); set('bs',d.baseSharp);
+      set('ms',d.maxSpeed); set('ss',d.searchSpeed);
+      document.getElementById('priority-left').checked = (d.priorityLeft == 1);
+    } catch(e){}
+  }
+
+  syncUIFromStatus();
+  setInterval(pollStatus, 250);
+});
+</script>
+</body>
+</html>
+)rawliteral";
+
+// ═══════════════════════════════════════════════════════════════
+//  MOTOR FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
+void initMotor() {
+  ledcAttach(PWMA, PWM_FREQ, PWM_RES);
+  ledcAttach(PWMB, PWM_FREQ, PWM_RES);
+
+  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
+  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
+  pinMode(STBY, OUTPUT);
+  digitalWrite(STBY, HIGH);
+}
+
+void driveMotorL(int sp) {
+  sp = constrain(sp, -255, 255);
+  if      (sp > 0) { digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW); }
+  else if (sp < 0) { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, HIGH); sp = -sp; }
+  else             { digitalWrite(AIN1, LOW);   digitalWrite(AIN2, LOW); }
+  ledcWrite(PWMA, (uint32_t)sp);
+  motorL_val = sp;
+}
+
+void driveMotorR(int sp) {
+  sp = constrain(sp, -255, 255);
+  if      (sp > 0) { digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW); }
+  else if (sp < 0) { digitalWrite(BIN1, LOW);  digitalWrite(BIN2, HIGH); sp = -sp; }
+  else             { digitalWrite(BIN1, LOW);   digitalWrite(BIN2, LOW); }
+  ledcWrite(PWMB, (uint32_t)sp);
+  motorR_val = sp;
+}
+
+void stopMotor() {
+  driveMotorL(0);
+  driveMotorR(0);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SENSOR READING
+// ═══════════════════════════════════════════════════════════════
+void readSensor() {
+  for (int i = 0; i < 6; i++) {
+    long sum = 0;
+    for (int s = 0; s < SAMPLES; s++) sum += analogRead(SENSOR_PINS[i]);
+    rawVals[i]   = (int)(sum / SAMPLES);
+    sensorVal[i] = (rawVals[i] < sensorThreshold[i]) ? 1 : 0;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  POSISI ANALOG BERBOBOT
+// ═══════════════════════════════════════════════════════════════
+float getPosition() {
+  float wSum  = 0.0f;
+  float total = 0.0f;
+
+  for (int i = 0; i < 6; i++) {
+    int range = sensorMax[i] - sensorMin[i];
+    if (range < 150) continue;
+
+    float norm = (float)(sensorThreshold[i] - rawVals[i])
+               / (float)(sensorThreshold[i] - sensorMin[i] + 1);
+    norm = constrain(norm, 0.0f, 1.0f);
+
+    if (norm > 0.15f) {
+      wSum  += WEIGHT[i] * norm;
+      total += norm;
+    }
+  }
+
+  if (total < 0.15f) return lastPos;
+
+  float pos = wSum / total;
+  lastPos = pos;
+  return pos;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  KALIBRASI
+// ═══════════════════════════════════════════════════════════════
+void startCalibration() {
+  for (int i = 0; i < 6; i++) {
+    sensorMin[i] = ADC_MAX;
+    sensorMax[i] = 0;
+  }
+  isCalibrating = true;
+  calibStart    = millis();
+  robotRunning  = false;
+  stopMotor();
+  robotStateStr = "CALIB";
+  statusMessage = "📐 Kalibrasi berjalan... gerakkan robot!";
+}
+
+void saveCalibration() {
+  prefs.begin("calib", false);
+  for (int i = 0; i < 6; i++) {
+    prefs.putInt(("mn" + String(i)).c_str(), sensorMin[i]);
+    prefs.putInt(("mx" + String(i)).c_str(), sensorMax[i]);
+    prefs.putInt(("th" + String(i)).c_str(), sensorThreshold[i]);
+  }
+  prefs.end();
+}
+
+void loadCalibration() {
+  prefs.begin("calib", true);
+  if (prefs.isKey("mn0")) {
+    for (int i = 0; i < 6; i++) {
+      sensorMin[i]       = prefs.getInt(("mn" + String(i)).c_str(), ADC_MAX);
+      sensorMax[i]       = prefs.getInt(("mx" + String(i)).c_str(), 0);
+      sensorThreshold[i] = prefs.getInt(("th" + String(i)).c_str(), ADC_MAX / 2);
+    }
+  }
+  prefs.end();
+}
+
+void clearCalibration() {
+  prefs.begin("calib", false);
+  prefs.clear();
+  prefs.end();
+  for (int i = 0; i < 6; i++) {
+    sensorMin[i] = ADC_MAX; sensorMax[i] = 0;
+    sensorThreshold[i] = ADC_MAX / 2;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SAVE / LOAD ALL SETTINGS
+// ═══════════════════════════════════════════════════════════════
+void saveAllSettings() {
+  prefs.begin("cfg", false);
+  prefs.putFloat("Kp", Kp);  prefs.putFloat("Ki", Ki);  prefs.putFloat("Kd", Kd);
+  prefs.putInt("bN", baseNormal); prefs.putInt("bS", baseSharp);
+  prefs.putInt("mS", maxSpeed);   prefs.putInt("sS", searchSpeed);
+  prefs.putBool("pL", priorityLeft);
+  prefs.end();
+}
+
+void loadAllSettings() {
+  prefs.begin("cfg", true);
+  if (prefs.isKey("Kp")) {
+    Kp          = prefs.getFloat("Kp", 22.0f);
+    Ki          = prefs.getFloat("Ki", 0.05f);
+    Kd          = prefs.getFloat("Kd", 20.0f);
+    baseNormal  = prefs.getInt("bN", 90);
+    baseSharp   = prefs.getInt("bS", 70);
+    maxSpeed    = prefs.getInt("mS", 120);
+    searchSpeed = prefs.getInt("sS", 75);
+    priorityLeft = prefs.getBool("pL", true);
+    pid.SetTunings(Kp, Ki, Kd);
+    pid.SetOutputLimits(-maxSpeed, maxSpeed);
+  }
+  prefs.end();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  KONTROL PID
+// ═══════════════════════════════════════════════════════════════
+void pidControl() {
+  float pos    = getPosition();
+  pidInput     = pos;
+  pidSetpoint  = 0.0f;
+  pid.Compute();
+
+  int L = baseNormal + (int)pidOutput;
+  int R = baseNormal - (int)pidOutput;
+
+  L = constrain(L, -maxSpeed, maxSpeed);
+  R = constrain(R, -maxSpeed, maxSpeed);
+
+  driveMotorL(L);
+  driveMotorR(R);
+  robotStateStr = "FOLLOW";
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SEARCH LINE
+// ═══════════════════════════════════════════════════════════════
+void searchLine() {
+  if (lastPos <= 0.0f) {
+    driveMotorL(-searchSpeed);
+    driveMotorR(searchSpeed);
+    robotStateStr = "SEARCH_L";
+  } else {
+    driveMotorL(searchSpeed);
+    driveMotorR(-searchSpeed);
+    robotStateStr = "SEARCH_R";
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  STATUS JSON
+// ═══════════════════════════════════════════════════════════════
+void handleStatus() {
+  String j = "{";
+  j += "\"kp\":"          + String(Kp, 2)          + ",";
+  j += "\"ki\":"          + String(Ki, 3)          + ",";
+  j += "\"kd\":"          + String(Kd, 2)          + ",";
+  j += "\"state\":\""     + robotStateStr          + "\",";
+  j += "\"error\":"       + String(pidInput, 2)    + ",";
+  j += "\"motorL\":"      + String(motorL_val)     + ",";
+  j += "\"motorR\":"      + String(motorR_val)     + ",";
+  j += "\"baseNormal\":"  + String(baseNormal)     + ",";
+  j += "\"baseSharp\":"   + String(baseSharp)      + ",";
+  j += "\"maxSpeed\":"    + String(maxSpeed)       + ",";
+  j += "\"searchSpeed\":" + String(searchSpeed)    + ",";
+  j += "\"priorityLeft\":" + String(priorityLeft ? 1 : 0) + ",";
+  j += "\"message\":\""   + statusMessage          + "\",";
+  j += "\"sensors\":[";
+  for (int i = 0; i < 6; i++) { j += String(rawVals[i]); if (i < 5) j += ","; }
+  j += "],\"sensorActive\":[";
+  for (int i = 0; i < 6; i++) { j += String(sensorVal[i]); if (i < 5) j += ","; }
+  j += "]}";
+  server.send(200, "application/json", j);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SETUP
+// ═══════════════════════════════════════════════════════════════
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n=== Line Follower PID — ESP32 ===");
+
+  for (int i = 0; i < 6; i++) {
+    pinMode(SENSOR_PINS[i], INPUT);
+    sensorMin[i] = ADC_MAX; sensorMax[i] = 0;
+    sensorThreshold[i] = ADC_MAX / 2;
+  }
+
+  initMotor();
+  stopMotor();
+
+  loadCalibration();
+  loadAllSettings();
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(AP_SSID, AP_PASS);
+  Serial.println("WiFi AP: " + String(AP_SSID));
+  Serial.println("Web UI : http://" + WiFi.softAPIP().toString());
+
+  pid.SetOutputLimits(-maxSpeed, maxSpeed);
+  pid.SetSampleTimeUs(5000);
+  pid.SetMode(QuickPID::Control::automatic);
+
+  server.on("/", HTTP_GET, []() {
+    server.send_P(200, "text/html", INDEX_HTML);
+  });
+
+  server.on("/status", HTTP_GET, handleStatus);
+
+  server.on("/set_pid", HTTP_POST, []() {
+    if (server.hasArg("kp")) Kp = server.arg("kp").toFloat();
+    if (server.hasArg("ki")) Ki = server.arg("ki").toFloat();
+    if (server.hasArg("kd")) Kd = server.arg("kd").toFloat();
+    pid.SetTunings(Kp, Ki, Kd);
+    Serial.printf("PID updated → Kp=%.2f Ki=%.3f Kd=%.2f\n", Kp, Ki, Kd);
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/set_speed", HTTP_POST, []() {
+    if (server.hasArg("base_normal"))  baseNormal  = server.arg("base_normal").toInt();
+    if (server.hasArg("base_sharp"))   baseSharp   = server.arg("base_sharp").toInt();
+    if (server.hasArg("max_speed"))    maxSpeed    = server.arg("max_speed").toInt();
+    if (server.hasArg("search_speed")) searchSpeed = server.arg("search_speed").toInt();
+    if (server.hasArg("priority_left")) priorityLeft = (server.arg("priority_left") == "1");
+    pid.SetOutputLimits(-maxSpeed, maxSpeed);
+    Serial.printf("Speed updated → N=%d S=%d Max=%d Srch=%d\n",
+                  baseNormal, baseSharp, maxSpeed, searchSpeed);
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/start", HTTP_POST, []() {
+    robotRunning  = true;
+    robotStateStr = "FOLLOW";
+    statusMessage = "▶ Robot berjalan";
+    Serial.println("Robot STARTED");
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/stop", HTTP_POST, []() {
+    robotRunning  = false;
+    stopMotor();
+    robotStateStr = "IDLE";
+    statusMessage = "■ Robot dihentikan";
+    Serial.println("Robot STOPPED");
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/calibrate", HTTP_POST, []() {
+    startCalibration();
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/save_calib", HTTP_POST, []() {
+    saveCalibration();
+    statusMessage = "💾 Kalibrasi disimpan ke Flash";
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/load_calib", HTTP_POST, []() {
+    loadCalibration();
+    statusMessage = "📤 Kalibrasi dimuat dari Flash";
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/clear_calib", HTTP_POST, []() {
+    clearCalibration();
+    statusMessage = "🗑 Data kalibrasi dihapus";
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/save_settings", HTTP_POST, []() {
+    saveAllSettings();
+    statusMessage = "💾 Semua setting disimpan";
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.on("/load_settings", HTTP_POST, []() {
+    loadAllSettings();
+    statusMessage = "📤 Setting dimuat";
+    server.send(200, "text/plain", "OK");
+  });
+
+  server.begin();
+  Serial.println("HTTP server ready.");
+  Serial.println("=================================");
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  LOOP UTAMA
+// ═══════════════════════════════════════════════════════════════
+void loop() {
+  server.handleClient();
+  readSensor();
+
+  if (isCalibrating) {
+    unsigned long elapsed = millis() - calibStart;
+    if (elapsed < CALIB_TIME_MS) {
+      for (int i = 0; i < 6; i++) {
+        if (rawVals[i] < sensorMin[i]) sensorMin[i] = rawVals[i];
+        if (rawVals[i] > sensorMax[i]) sensorMax[i] = rawVals[i];
+      }
+    } else {
+      for (int i = 0; i < 6; i++) {
+        int range = sensorMax[i] - sensorMin[i];
+        sensorThreshold[i] = (range < 150)
+          ? ADC_MAX / 2
+          : sensorMin[i] + (int)(range * THRESH_FACTOR);
+      }
+      isCalibrating = false;
+      robotStateStr = "IDLE";
+      statusMessage = "✅ Kalibrasi selesai! Tekan SIMPAN KALIBRASI.";
+      Serial.println("Calibration done:");
+      for (int i = 0; i < 6; i++) {
+        Serial.printf("  S%d → min=%d max=%d th=%d\n",
+          i+1, sensorMin[i], sensorMax[i], sensorThreshold[i]);
+      }
+    }
+  }
+
+  else if (robotRunning) {
+    int activeCount = 0;
+    for (int i = 0; i < 6; i++) if (sensorVal[i]) activeCount++;
+
+    if (activeCount >= 1) {
+      pidControl();
+    } else {
+      searchLine();
+    }
+  }
+
+  else {
+    stopMotor();
+    robotStateStr = "IDLE";
+  }
+
+  delay(3);
+}
