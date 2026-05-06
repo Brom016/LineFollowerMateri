@@ -1,0 +1,175 @@
+const char HTML_PAGE[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Robot Sumo Controller</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; touch-action:none; }
+    body {
+      background:#0d0f14;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      min-height:100vh; font-family:monospace;
+      color:#e0e0e0; user-select:none;
+    }
+    h1 { font-size:1.1rem; letter-spacing:.2em; color:#00e5ff; margin-bottom:6px; }
+    #status { font-size:.8rem; color:#555; margin-bottom:30px; }
+    #status.ok { color:#2ed573; }
+    #status.err { color:#ff4757; }
+    .gamepad {
+      background:#1a1d24; border-radius:28px;
+      padding:30px 40px; display:flex;
+      gap:60px; align-items:center;
+      border:2px solid #2a2f3a;
+    }
+    .stick-wrap { display:flex; flex-direction:column; align-items:center; gap:10px; }
+    .stick-label { font-size:.65rem; letter-spacing:.15em; text-transform:uppercase; color:#555; }
+    .joystick {
+      width:120px; height:120px; border-radius:50%;
+      background:#0f1118; border:2px solid #2a2f3a; position:relative;
+    }
+    .knob {
+      width:50px; height:50px;
+      background:radial-gradient(circle at 35% 35%, #555, #1a1a1a);
+      border:2px solid #444; border-radius:50%;
+      position:absolute; top:50%; left:50%;
+      transform:translate(-50%,-50%); cursor:grab;
+    }
+    .knob.active { box-shadow:0 0 0 3px rgba(0,229,255,.4); }
+    .dir-display { font-size:.75rem; color:#00e5ff; min-height:18px; }
+    #speed-bar {
+      margin-top:20px; width:220px; background:#111;
+      border-radius:6px; height:8px; overflow:hidden;
+    }
+    #speed-fill {
+      height:100%; width:0%;
+      background:linear-gradient(90deg,#00e5ff,#a55eea);
+      border-radius:6px; transition:width .1s;
+    }
+  </style>
+</head>
+<body>
+  <h1>SUMO CONTROLLER</h1>
+  <div id="status">Menghubungkan...</div>
+
+  <div class="gamepad">
+    <div class="stick-wrap">
+      <div class="stick-label">Belok</div>
+      <div class="joystick" id="leftZone">
+        <div class="knob" id="leftKnob"></div>
+      </div>
+      <div class="dir-display" id="leftTxt">-</div>
+    </div>
+
+    <div style="font-size:2rem;">⚔</div>
+
+    <div class="stick-wrap">
+      <div class="stick-label">Maju/Mundur</div>
+      <div class="joystick" id="rightZone">
+        <div class="knob" id="rightKnob"></div>
+      </div>
+      <div class="dir-display" id="rightTxt">-</div>
+    </div>
+  </div>
+
+  <div id="speed-bar"><div id="speed-fill"></div></div>
+
+  <script>
+    // ── WebSocket dengan auto-reconnect ──────────────────────
+    let ws, reconnectTimer;
+
+    function connect() {
+      ws = new WebSocket('ws://' + location.host + '/ws');
+
+      ws.onopen = () => {
+        clearTimeout(reconnectTimer);
+        document.getElementById('status').textContent = 'Terhubung ✓';
+        document.getElementById('status').className  = 'ok';
+      };
+
+      ws.onclose = () => {
+        document.getElementById('status').textContent = 'Terputus — mencoba ulang...';
+        document.getElementById('status').className  = 'err';
+        reconnectTimer = setTimeout(connect, 2000);   // reconnect 2 detik
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    connect();
+
+    function send(data) {
+      if (ws && ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify(data));
+    }
+
+    // ── Joystick Universal ───────────────────────────────────
+    function makeJoystick(zoneId, knobId, onMove) {
+      const zone = document.getElementById(zoneId);
+      const knob = document.getElementById(knobId);
+      let active = false;
+      const R = 35;
+
+      function getCenter() {
+        const r = zone.getBoundingClientRect();
+        return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+      }
+
+      function move(e) {
+        e.preventDefault();
+        if (!active) return;
+        const t = e.touches ? e.touches[0] : e;
+        const { cx, cy } = getCenter();
+        let dx = t.clientX - cx, dy = t.clientY - cy;
+        const dist = Math.hypot(dx, dy);
+        if (dist > R) { dx = dx / dist * R; dy = dy / dist * R; }
+        knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+        onMove(Math.round(dx / R * 100), Math.round(-dy / R * 100));
+      }
+
+      function start(e) {
+        e.preventDefault(); active = true;
+        knob.classList.add('active'); move(e);
+      }
+
+      function end() {
+        active = false;
+        knob.classList.remove('active');
+        knob.style.transform = 'translate(-50%, -50%)';
+        onMove(0, 0);
+        send({ lx: 0, ry: 0 });
+      }
+
+      zone.addEventListener('mousedown',  start);
+      zone.addEventListener('touchstart', start, { passive: false });
+      window.addEventListener('mousemove',  move);
+      window.addEventListener('touchmove',  move, { passive: false });
+      window.addEventListener('mouseup',  end);
+      window.addEventListener('touchend', end);
+    }
+
+    // ── State Joystick ───────────────────────────────────────
+    let lx = 0, ry = 0;
+
+    makeJoystick('leftZone', 'leftKnob', (nx, ny) => {
+      lx = nx;
+      document.getElementById('leftTxt').textContent =
+        nx < -10 ? '← Kiri' : nx > 10 ? 'Kanan →' : '-';
+      send({ lx, ry });
+    });
+
+    makeJoystick('rightZone', 'rightKnob', (nx, ny) => {
+      ry = ny;
+      document.getElementById('rightTxt').textContent =
+        ny > 10 ? '▲ Maju' : ny < -10 ? '▼ Mundur' : '-';
+      document.getElementById('speed-fill').style.width = Math.abs(ny) + '%';
+      send({ lx, ry });
+    });
+
+    window.addEventListener('beforeunload', () => send({ stop: true }));
+  </script>
+</body>
+</html>
+)rawliteral";
