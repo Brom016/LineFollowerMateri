@@ -17,6 +17,7 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
     h1 { font-size:1.1rem; letter-spacing:.2em; color:#00e5ff; margin-bottom:6px; }
     #status { font-size:.8rem; color:#555; margin-bottom:30px; }
     #status.ok { color:#2ed573; }
+    #status.err { color:#ff4757; }
     .gamepad {
       background:#1a1d24; border-radius:28px;
       padding:30px 40px; display:flex;
@@ -62,7 +63,7 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
       <div class="dir-display" id="leftTxt">-</div>
     </div>
 
-    <div style="font-size:2rem;">vs</div>
+    <div style="font-size:2rem;">⚔</div>
 
     <div class="stick-wrap">
       <div class="stick-label">Maju/Mundur</div>
@@ -76,23 +77,35 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
   <div id="speed-bar"><div id="speed-fill"></div></div>
 
   <script>
-    // --- Koneksi WebSocket ---
-    const ws = new WebSocket('ws://' + location.host + '/ws');
-    ws.onopen  = () => {
-      document.getElementById('status').textContent = 'Terhubung';
-      document.getElementById('status').className = 'ok';
-    };
-    ws.onclose = () => {
-      document.getElementById('status').textContent = 'Terputus';
-      document.getElementById('status').className = '';
-    };
+    // ── WebSocket dengan auto-reconnect ──────────────────────
+    let ws, reconnectTimer;
+
+    function connect() {
+      ws = new WebSocket('ws://' + location.host + '/ws');
+
+      ws.onopen = () => {
+        clearTimeout(reconnectTimer);
+        document.getElementById('status').textContent = 'Terhubung ✓';
+        document.getElementById('status').className  = 'ok';
+      };
+
+      ws.onclose = () => {
+        document.getElementById('status').textContent = 'Terputus — mencoba ulang...';
+        document.getElementById('status').className  = 'err';
+        reconnectTimer = setTimeout(connect, 2000);   // reconnect 2 detik
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    connect();
 
     function send(data) {
-      if (ws.readyState === WebSocket.OPEN)
+      if (ws && ws.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify(data));
     }
 
-    // --- Fungsi Joystick Universal ---
+    // ── Joystick Universal ───────────────────────────────────
     function makeJoystick(zoneId, knobId, onMove) {
       const zone = document.getElementById(zoneId);
       const knob = document.getElementById(knobId);
@@ -101,7 +114,7 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
 
       function getCenter() {
         const r = zone.getBoundingClientRect();
-        return { cx: r.left + r.width/2, cy: r.top + r.height/2 };
+        return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
       }
 
       function move(e) {
@@ -110,12 +123,10 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
         const t = e.touches ? e.touches[0] : e;
         const { cx, cy } = getCenter();
         let dx = t.clientX - cx, dy = t.clientY - cy;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist > R) { dx = dx/dist*R; dy = dy/dist*R; }
+        const dist = Math.hypot(dx, dy);
+        if (dist > R) { dx = dx / dist * R; dy = dy / dist * R; }
         knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-        const nx = Math.round(dx / R * 100);
-        const ny = Math.round(-dy / R * 100);
-        onMove(nx, ny);
+        onMove(Math.round(dx / R * 100), Math.round(-dy / R * 100));
       }
 
       function start(e) {
@@ -124,36 +135,35 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
       }
 
       function end() {
-        active = false; knob.classList.remove('active');
+        active = false;
+        knob.classList.remove('active');
         knob.style.transform = 'translate(-50%, -50%)';
         onMove(0, 0);
-        send({ stop: false, lx: 0, ry: 0 });
+        send({ lx: 0, ry: 0 });
       }
 
-      zone.addEventListener('mousedown', start);
+      zone.addEventListener('mousedown',  start);
       zone.addEventListener('touchstart', start, { passive: false });
-      window.addEventListener('mousemove', move);
-      window.addEventListener('touchmove', move, { passive: false });
-      window.addEventListener('mouseup', end);
+      window.addEventListener('mousemove',  move);
+      window.addEventListener('touchmove',  move, { passive: false });
+      window.addEventListener('mouseup',  end);
       window.addEventListener('touchend', end);
     }
 
-    // --- State Global Joystick ---
+    // ── State Joystick ───────────────────────────────────────
     let lx = 0, ry = 0;
 
-    // Joystick kiri: hanya sumbu X (belok)
     makeJoystick('leftZone', 'leftKnob', (nx, ny) => {
       lx = nx;
       document.getElementById('leftTxt').textContent =
-        nx < -10 ? 'Kiri' : nx > 10 ? 'Kanan' : '-';
+        nx < -10 ? '← Kiri' : nx > 10 ? 'Kanan →' : '-';
       send({ lx, ry });
     });
 
-    // Joystick kanan: hanya sumbu Y (maju/mundur)
     makeJoystick('rightZone', 'rightKnob', (nx, ny) => {
       ry = ny;
       document.getElementById('rightTxt').textContent =
-        ny > 10 ? 'Maju' : ny < -10 ? 'Mundur' : '-';
+        ny > 10 ? '▲ Maju' : ny < -10 ? '▼ Mundur' : '-';
       document.getElementById('speed-fill').style.width = Math.abs(ny) + '%';
       send({ lx, ry });
     });
